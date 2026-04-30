@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tradscape</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="game">
+  <canvas id="world" width="720" height="720"></canvas>
+  <div id="panel">
+    <div id="tabs">
+      <button data-tab="inv" class="active">Inv</button>
+      <button data-tab="skills">Skills</button>
+      <button data-tab="trade">Trade</button>
+    </div>
+    <div id="tab-inv" class="tab-content">
+      <div id="inv-grid"></div>
+      <div id="equipped">Equipped: <span id="eq-list">none</span></div>
+      <div class="hint">Left-click berries to eat. Tools are inventory items. Right-click a slot to sell near the trader.</div>
+    </div>
+    <div id="tab-skills" class="tab-content hidden">
+      <div id="skills-list"></div>
+      <hr>
+      <div>HP: <span id="hp-cur">10</span>/<span id="hp-max">10</span></div>
+    </div>
+    <div id="tab-trade" class="tab-content hidden">
+      <div>Trader (be adjacent):</div>
+      <h3>Buy Tools</h3>
+      <div id="shop-buy-list"></div>
+      <h3>Sell Inventory</h3>
+      <div id="shop-sell-list"></div>
+      <div class="hint">Starter bronze tools are free. Iron tools cost 20x bronze, steel costs 20x iron.</div>
+    </div>
+  </div>
+</div>
+<div id="log"></div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

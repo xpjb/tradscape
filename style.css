@@ -1,0 +1,116 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #2a1f15;
+  color: #e8d9b8;
+  font-family: "Segoe UI", "Helvetica", monospace;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 12px;
+}
+#game { display: flex; gap: 8px; }
+#world {
+  background: #000;
+  image-rendering: pixelated;
+  border: 2px solid #8b6f47;
+  cursor: crosshair;
+}
+#panel {
+  width: 252px;
+  background: linear-gradient(#5a4a36, #3b3024);
+  border: 2px solid #8b6f47;
+  padding: 8px;
+  font-size: 13px;
+}
+#tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+#tabs button {
+  flex: 1;
+  background: #5a4a36;
+  color: #e8d9b8;
+  border: 1px solid #8b6f47;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+#tabs button.active { background: #8b6f47; color: #fff; }
+.tab-content.hidden { display: none; }
+#inv-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 56px);
+  gap: 2px;
+  margin-bottom: 8px;
+}
+.inv-slot {
+  width: 56px;
+  height: 56px;
+  background: #2a2018;
+  border: 1px solid #8b6f47;
+  position: relative;
+}
+.inv-slot.has-item { cursor: pointer; }
+.inv-slot img {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.inv-slot .label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #ccc;
+  text-align: center;
+  pointer-events: none;
+}
+.qty {
+  position: absolute;
+  top: 2px; left: 2px;
+  color: #ffe066;
+  font-size: 11px;
+  text-shadow: 1px 1px 0 #000;
+  font-weight: bold;
+}
+#equipped { font-size: 12px; margin-bottom: 4px; }
+.hint { color: #b8a98a; font-size: 11px; margin-top: 4px; line-height: 1.3; }
+#skills-list div { padding: 2px 0; border-bottom: 1px solid #5a4a36; }
+#tab-trade h3 {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  color: #ffe066;
+}
+#tab-trade button,
+.trade-row {
+  display: block;
+  width: 100%;
+  margin: 4px 0;
+  padding: 6px;
+  background: #5a4a36;
+  border: 1px solid #8b6f47;
+  color: #e8d9b8;
+  cursor: pointer;
+  font-family: inherit;
+}
+.trade-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+#tab-trade button:hover,
+.trade-row:hover { background: #8b6f47; }
+#log {
+  margin-top: 8px;
+  width: 988px;
+  height: 120px;
+  background: #1a1410;
+  border: 2px solid #8b6f47;
+  overflow-y: auto;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: monospace;
+}
+#log div { line-height: 1.3; }
