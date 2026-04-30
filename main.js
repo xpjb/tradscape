@@ -15,6 +15,7 @@ let lastTickAt = performance.now();
 const entityAnim = new Map();
 // active transient effects: { kind, x, y, start, dur, dmg? }
 const effects = [];
+const seenChatIds = new Set();
 
 const TILE_IMG = {
   grass: 'tiles/grass.png', dirt: 'tiles/dirt.png', sand: 'tiles/sand.png',
@@ -28,7 +29,11 @@ const OBJ_IMG = {
   bush: 'entities/berry_bush.png', bush_empty: 'entities/berry_bush_empty.png',
   boulder: 'entities/boulder.png', trader: 'entities/trader.png',
 };
-const MOB_IMG = { goblin: 'entities/goblin.png' };
+const MOB_IMG = {
+  goblin: 'entities/goblin.png',
+  club_goblin: 'entities/club_goblin.png',
+  ninja: 'entities/ninja.png',
+};
 const ITEM_IMG = {
   pine_logs: 'items/pine_logs.png', oak_logs: 'items/oak_logs.png', yew_logs: 'items/yew_logs.png',
   copper_ore: 'items/copper_ore.png', iron_ore: 'items/iron_ore.png', gold_ore: 'items/gold_ore.png',
@@ -38,8 +43,9 @@ const ITEM_IMG = {
 };
 const TILE_COLOR = { grass: '#3a7d2c', dirt: '#7a5a3b', sand: '#d9c787', water: '#2a5fb0', stone: '#888', path: '#a99a82' };
 const OBJ_COLOR  = { tree: '#1f5417', stump: '#5a3a1f', rock: '#666', depleted_rock: '#aaa', bush: '#7a3', boulder: '#777', trader: '#c0a060' };
-const MOB_COLOR  = { goblin: '#7caa3c' };
-const WALKABLE_OBJ = new Set(['none', 'stump', 'depleted_rock']);
+const MOB_COLOR  = { goblin: '#7caa3c', club_goblin: '#6b8f2a', ninja: '#2b2b35' };
+const MOB_LABEL = { goblin: 'G', club_goblin: 'C', ninja: 'N' };
+const WALKABLE_OBJ = new Set(['none']);
 const ITEM_NAME = {
   pine_logs: 'Pine logs', oak_logs: 'Oak logs', yew_logs: 'Yew logs',
   copper_ore: 'Copper ore', iron_ore: 'Iron ore', gold_ore: 'Gold ore',
@@ -50,6 +56,10 @@ const ITEM_NAME = {
 
 function itemName(item) {
   return ITEM_NAME[item] || item.replaceAll('_', ' ');
+}
+
+function itemIcon(item) {
+  return ITEM_IMG[item] || `items/${item}.png`;
 }
 
 function objectArtKey(o) {
@@ -111,14 +121,16 @@ function tradscapeWsUrl() {
 }
 const ws = new WebSocket(tradscapeWsUrl());
 ws.onopen = () => {
+  const uuid = localStorage.getItem('tradscape_uuid') || '';
   const name = (localStorage.getItem('tradscape_name')) || prompt('Character name?', 'Adventurer') || 'Adventurer';
   localStorage.setItem('tradscape_name', name);
-  ws.send(JSON.stringify({ t: 'join', name }));
+  ws.send(JSON.stringify({ t: 'join', uuid, name }));
 };
 ws.onmessage = (ev) => {
   const m = JSON.parse(ev.data);
   if (m.t === 'init') {
     mapInfo = m;
+    if (m.uuid) localStorage.setItem('tradscape_uuid', m.uuid);
   } else if (m.t === 'state') {
     if (m.tick_ms) tickMs = m.tick_ms;
     onState(m);
@@ -233,7 +245,7 @@ function render() {
     const [ex, ey] = entPos('m', m.id, m.x, m.y);
     const vx = ex - cx, vy = ey - cy;
     if (vx < -1 || vy < -1 || vx > VIEW_W || vy > VIEW_H) continue;
-    drawCell(img(MOB_IMG[m.kind] || ''), MOB_COLOR[m.kind] || '#a33', 'G', vx * TILE, vy * TILE);
+    drawCell(img(MOB_IMG[m.kind] || ''), MOB_COLOR[m.kind] || '#a33', MOB_LABEL[m.kind] || 'M', vx * TILE, vy * TILE);
     drawHpBar(vx * TILE, vy * TILE, m.hp / m.hp_max);
   }
 
@@ -445,8 +457,15 @@ canvas.addEventListener('click', (e) => {
   if (!state || !mapInfo) return;
   const r = canvas.getBoundingClientRect();
   const [cx, cy] = camera();
-  const wx = Math.floor(cx + (e.clientX - r.left) / TILE);
-  const wy = Math.floor(cy + (e.clientY - r.top) / TILE);
+  const mx = e.clientX - r.left;
+  const my = e.clientY - r.top;
+  const clickedMob = mobAtScreenPoint(mx, my, cx, cy);
+  if (clickedMob) {
+    ws.send(JSON.stringify({ t: 'attack', mid: clickedMob.id }));
+    return;
+  }
+  const wx = Math.floor(cx + mx / TILE);
+  const wy = Math.floor(cy + my / TILE);
   ws.send(JSON.stringify({ t: 'click', x: wx, y: wy }));
 });
 canvas.addEventListener('contextmenu', (e) => {
@@ -462,6 +481,33 @@ document.querySelectorAll('#tabs button').forEach(b => {
     document.getElementById('tab-' + b.dataset.tab).classList.remove('hidden');
   };
 });
+
+function mobAtScreenPoint(mx, my, cx, cy) {
+  for (let i = state.mobs.length - 1; i >= 0; i--) {
+    const m = state.mobs[i];
+    const [ex, ey] = entPos('m', m.id, m.x, m.y);
+    const px = (ex - cx) * TILE;
+    const py = (ey - cy) * TILE;
+    if (mx >= px && mx < px + TILE && my >= py && my < py + TILE) {
+      return m;
+    }
+  }
+  return null;
+}
+
+document.getElementById('trade-close').onclick = () => {
+  document.getElementById('trade-window').classList.add('hidden');
+  ws.send(JSON.stringify({ t: 'close_trade' }));
+};
+
+document.getElementById('chat-form').onsubmit = (e) => {
+  e.preventDefault();
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  ws.send(JSON.stringify({ t: 'chat', text }));
+  input.value = '';
+};
 
 function updatePanel(s) {
   const grid = document.getElementById('inv-grid');
@@ -500,6 +546,7 @@ function updatePanel(s) {
   }
   document.getElementById('eq-list').textContent = `axe T${s.you.axe_tier || 0}, pickaxe T${s.you.pickaxe_tier || 0}`;
   renderTrade(s);
+  renderChat(s.chat || []);
 
   const sk = s.you.skills;
   document.getElementById('skills-list').innerHTML = `
@@ -514,46 +561,102 @@ function updatePanel(s) {
 }
 
 function renderTrade(s) {
+  const win = document.getElementById('trade-window');
   const buyList = document.getElementById('shop-buy-list');
   const sellList = document.getElementById('shop-sell-list');
-  if (!buyList || !sellList) return;
+  if (!win || !buyList || !sellList) return;
+
+  win.classList.toggle('hidden', !s.you.trade_open);
 
   buyList.innerHTML = '';
   for (const row of s.shop || []) {
-    const el = document.createElement('button');
-    el.className = 'trade-row';
-    el.innerHTML = `<span>${row.name}</span><span>T${row.tier} ${row.buy}gp</span>`;
-    el.onclick = () => ws.send(JSON.stringify({ t: 'buy', item: row.item }));
-    buyList.appendChild(el);
+    buyList.appendChild(tradeButton({
+      item: row.item,
+      name: row.name,
+      detail: `T${row.tier} ${row.buy}gp`,
+      onClick: () => ws.send(JSON.stringify({ t: 'buy', item: row.item })),
+    }));
   }
 
   sellList.innerHTML = '';
-  let anySellable = false;
+  let anyItem = false;
   for (let i = 0; i < s.you.inv.length; i++) {
     const it = s.you.inv[i];
-    if (!it || !it.item || it.item === 'coins') continue;
+    if (!it || !it.item) continue;
+    anyItem = true;
     const sale = (s.sells || []).find(x => x.item === it.item);
-    if (!sale) continue;
-    anySellable = true;
-    const el = document.createElement('button');
-    el.className = 'trade-row';
-    el.innerHTML = `<span>${itemName(it.item)} x${it.qty}</span><span>${sale.sell * it.qty}gp</span>`;
-    el.onclick = () => ws.send(JSON.stringify({ t: 'sell', slot: i }));
-    sellList.appendChild(el);
+    const canSell = it.item !== 'coins' && sale;
+    sellList.appendChild(tradeButton({
+      item: it.item,
+      name: `${itemName(it.item)} x${it.qty}`,
+      detail: canSell ? `${sale.sell * it.qty}gp` : 'not for sale',
+      onClick: () => ws.send(JSON.stringify({ t: 'sell', slot: i })),
+      disabled: !canSell,
+    }));
   }
-  if (!anySellable) {
+  if (!anyItem) {
     const empty = document.createElement('div');
     empty.className = 'hint';
-    empty.textContent = 'No sellable items in inventory.';
+    empty.textContent = 'Your inventory is empty.';
     sellList.appendChild(empty);
   }
 }
 
+function tradeButton({ item, name, detail, onClick, disabled = false }) {
+  const el = document.createElement('button');
+  el.className = 'trade-row';
+  el.disabled = disabled;
+  const im = document.createElement('img');
+  im.src = `assets/${itemIcon(item)}`;
+  im.onerror = () => { im.style.display = 'none'; };
+  const label = document.createElement('span');
+  label.className = 'trade-name';
+  label.textContent = name;
+  const price = document.createElement('span');
+  price.className = 'trade-price';
+  price.textContent = detail;
+  el.append(im, label, price);
+  el.onclick = onClick;
+  return el;
+}
+
+function renderChat(messages) {
+  const el = document.getElementById('chat-log');
+  if (!el) return;
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+  for (const msg of messages) {
+    if (seenChatIds.has(msg.id)) continue;
+    seenChatIds.add(msg.id);
+    const row = document.createElement('div');
+    const name = document.createElement('span');
+    name.className = 'chat-name';
+    name.textContent = `${msg.name}: `;
+    const text = document.createElement('span');
+    text.textContent = msg.text;
+    row.append(name, text);
+    el.appendChild(row);
+  }
+  trimChatLog(el);
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
 function addLog(line) {
-  const el = document.getElementById('log');
-  const d = document.createElement('div');
-  d.textContent = line;
-  el.appendChild(d);
-  while (el.children.length > 60) el.removeChild(el.firstChild);
-  el.scrollTop = el.scrollHeight;
+  const el = document.getElementById('chat-log');
+  if (!el) return;
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+  const row = document.createElement('div');
+  row.className = 'chat-system';
+  const name = document.createElement('span');
+  name.className = 'chat-name';
+  name.textContent = 'System: ';
+  const text = document.createElement('span');
+  text.textContent = line;
+  row.append(name, text);
+  el.appendChild(row);
+  trimChatLog(el);
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+function trimChatLog(el) {
+  while (el.children.length > 100) el.removeChild(el.firstChild);
 }

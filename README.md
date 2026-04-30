@@ -14,13 +14,13 @@ Server listens on `http://localhost:8081` and serves the client at `/tradscape.h
 ## Controls
 
 - **Left-click tile** — walk there.
-- **Left-click tree / rock / berry bush / goblin / trader** — auto-walk adjacent and act.
+- **Left-click tree / rock / berry bush / goblin / trader** — auto-walk adjacent and act. Traders open a trade window.
 - **Right-click world** — stop current action.
 - **Left-click berry slot** — eat (+3 HP).
-- **Right-click inventory slot (next to trader)** — sell.
-- **Trade tab** — buy axe (10gp) or pickaxe (15gp) when adjacent to trader.
+- **Chat box** — send a global chat message. Commands: `/help`, `/nick name`.
 
-You spawn with 50 coins. Buy an axe before chopping, pickaxe before mining.
+You spawn with no coins and no tools. Pick berries, sell them to the trader, then buy an axe before chopping and a pickaxe before mining.
+Player progress is saved in `tradscape.sqlite3` by browser-stored player UUID.
 
 ## Adding assets
 
@@ -35,13 +35,16 @@ Until they're added, the client renders solid-color squares with a letter label 
 ## Protocol (JSON over WS)
 
 Client → Server:
-- `{t:"join", name}`
+- `{t:"join", uuid, name}`
 - `{t:"click", x, y}`
+- `{t:"attack", mid}`
 - `{t:"stop"}`
 - `{t:"eat", slot}`
-- `{t:"buy", item}` — `"axe"` or `"pickaxe"`
+- `{t:"buy", item}`
 - `{t:"sell", slot}`
+- `{t:"close_trade"}`
+- `{t:"chat", text}`
 
 Server → Client:
-- `{t:"init", w, h, tiles, you}` — once on connect
-- `{t:"state", tick, you, players, mobs, objects, log}` — every tick
+- `{t:"init", w, h, tiles, you, uuid}` — once on connect
+- `{t:"state", tick, you, players, mobs, objects, log, chat}` — every tick
