@@ -22,9 +22,10 @@ const TILE_IMG = {
   water: 'tiles/water.png', stone: 'tiles/stone.png', path: 'tiles/path.png',
 };
 const OBJ_IMG = {
-  tree: 'entities/tree.png', tree_tier_1: 'entities/tree_pine.png', tree_tier_2: 'entities/tree_oak.png', tree_tier_3: 'entities/tree_yew.png',
+  tree: 'entities/tree.png', tree_tier_1: 'entities/tree_pine.png', tree_tier_2: 'entities/tree_oak.png', tree_tier_3: 'entities/tree_yew.png', tree_tier_4: 'entities/tree_magic.png',
+  magic_tree: 'entities/tree_magic.png',
   stump: 'entities/tree_stump.png',
-  rock: 'entities/rock.png', rock_tier_1: 'entities/rock_copper.png', rock_tier_2: 'entities/rock_iron.png', rock_tier_3: 'entities/rock_gold.png',
+  rock: 'entities/rock.png', rock_tier_1: 'entities/rock_copper.png', rock_tier_2: 'entities/rock_iron.png', rock_tier_3: 'entities/rock_gold.png', rock_tier_4: 'entities/rock_cobalt.png',
   depleted_rock: 'entities/rock_depleted.png',
   bush: 'entities/berry_bush.png', bush_empty: 'entities/berry_bush_empty.png',
   boulder: 'entities/boulder.png', trader: 'entities/trader.png',
@@ -33,25 +34,28 @@ const MOB_IMG = {
   goblin: 'entities/goblin.png',
   club_goblin: 'entities/club_goblin.png',
   ninja: 'entities/ninja.png',
+  dragon: 'entities/dragon.png',
 };
 const ITEM_IMG = {
-  pine_logs: 'items/pine_logs.png', oak_logs: 'items/oak_logs.png', yew_logs: 'items/yew_logs.png',
-  copper_ore: 'items/copper_ore.png', iron_ore: 'items/iron_ore.png', gold_ore: 'items/gold_ore.png',
-  berries: 'items/berries.png', coins: 'items/coins.png',
-  bronze_axe: 'items/bronze_axe.png', iron_axe: 'items/iron_axe.png', steel_axe: 'items/steel_axe.png',
-  bronze_pickaxe: 'items/bronze_pickaxe.png', iron_pickaxe: 'items/iron_pickaxe.png', steel_pickaxe: 'items/steel_pickaxe.png',
+  pine_logs: 'items/pine_logs.png', oak_logs: 'items/oak_logs.png', yew_logs: 'items/yew_logs.png', magic_logs: 'items/magic_logs.png',
+  copper_ore: 'items/copper_ore.png', iron_ore: 'items/iron_ore.png', gold_ore: 'items/gold_ore.png', cobalt_ore: 'items/cobalt_ore.png',
+  berries: 'items/berries.png', salmon: 'items/salmon.png', coins: 'items/coins.png',
+  bronze_axe: 'items/bronze_axe.png', iron_axe: 'items/iron_axe.png', steel_axe: 'items/steel_axe.png', cobalt_axe: 'items/cobalt_axe.png',
+  bronze_pickaxe: 'items/bronze_pickaxe.png', iron_pickaxe: 'items/iron_pickaxe.png', steel_pickaxe: 'items/steel_pickaxe.png', cobalt_pickaxe: 'items/cobalt_pickaxe.png',
+  fishing_rod: 'items/fishing_rod.png',
 };
 const TILE_COLOR = { grass: '#3a7d2c', dirt: '#7a5a3b', sand: '#d9c787', water: '#2a5fb0', stone: '#888', path: '#a99a82' };
 const OBJ_COLOR  = { tree: '#1f5417', stump: '#5a3a1f', rock: '#666', depleted_rock: '#aaa', bush: '#7a3', boulder: '#777', trader: '#c0a060' };
-const MOB_COLOR  = { goblin: '#7caa3c', club_goblin: '#6b8f2a', ninja: '#2b2b35' };
-const MOB_LABEL = { goblin: 'G', club_goblin: 'C', ninja: 'N' };
+const MOB_COLOR  = { goblin: '#7caa3c', club_goblin: '#6b8f2a', ninja: '#2b2b35', dragon: '#8b2222' };
+const MOB_LABEL = { goblin: 'G', club_goblin: 'C', ninja: 'N', dragon: 'D' };
 const WALKABLE_OBJ = new Set(['none']);
 const ITEM_NAME = {
-  pine_logs: 'Pine logs', oak_logs: 'Oak logs', yew_logs: 'Yew logs',
-  copper_ore: 'Copper ore', iron_ore: 'Iron ore', gold_ore: 'Gold ore',
-  berries: 'Berries', coins: 'Coins',
-  bronze_axe: 'Bronze axe', iron_axe: 'Iron axe', steel_axe: 'Steel axe',
-  bronze_pickaxe: 'Bronze pickaxe', iron_pickaxe: 'Iron pickaxe', steel_pickaxe: 'Steel pickaxe',
+  pine_logs: 'Pine logs', oak_logs: 'Oak logs', yew_logs: 'Yew logs', magic_logs: 'Magic logs',
+  copper_ore: 'Copper ore', iron_ore: 'Iron ore', gold_ore: 'Gold ore', cobalt_ore: 'Cobalt ore',
+  berries: 'Berries', salmon: 'Salmon', coins: 'Coins',
+  bronze_axe: 'Bronze axe', iron_axe: 'Iron axe', steel_axe: 'Steel axe', cobalt_axe: 'Cobalt axe',
+  bronze_pickaxe: 'Bronze pickaxe', iron_pickaxe: 'Iron pickaxe', steel_pickaxe: 'Steel pickaxe', cobalt_pickaxe: 'Cobalt pickaxe',
+  fishing_rod: 'Fishing rod',
 };
 
 function itemName(item) {
@@ -64,12 +68,24 @@ function itemIcon(item) {
 
 function objectArtKey(o) {
   if (o.kind === 'bush' && o.berries === 0) return 'bush_empty';
-  if ((o.kind === 'tree' || o.kind === 'rock') && o.tier) return `${o.kind}_tier_${o.tier}`;
+  if (o.kind === 'tree') {
+    const t = Number(o.tier);
+    if (t === 4) return 'magic_tree';
+    if (t > 0) return `tree_tier_${t}`;
+  }
+  if (o.kind === 'rock' && o.tier != null && o.tier !== '') {
+    const t = Number(o.tier);
+    if (t > 0) return `rock_tier_${t}`;
+  }
   return o.kind;
 }
 
 function objectLabel(o) {
-  if ((o.kind === 'tree' || o.kind === 'rock') && o.tier) return `${o.kind[0].toUpperCase()}${o.tier}`;
+  if ((o.kind === 'tree' || o.kind === 'rock') && o.tier != null && o.tier !== '') {
+    const t = Number(o.tier);
+    if (!Number.isFinite(t)) return o.kind[0].toUpperCase();
+    return `${o.kind[0].toUpperCase()}${t}`;
+  }
   return o.kind[0].toUpperCase();
 }
 
@@ -173,7 +189,7 @@ function onState(m) {
 
 function pushEffect(e, now) {
   const dur = {
-    chop: 320, mine: 320, pick: 280,
+    chop: 320, mine: 320, pick: 280, fish: 340,
     hit_mob: 600, hit_player: 600, miss_mob: 500, miss_player: 500,
   }[e.k] || 300;
   effects.push({ kind: e.k, x: e.x, y: e.y, dmg: e.dmg, start: now, dur });
@@ -413,6 +429,19 @@ function drawEffect(e, t, cx, cy) {
       ctx.arc(px + Math.cos(ang) * d, py + Math.sin(ang) * d - t * 8, 3 * (1 - t * 0.5), 0, Math.PI * 2);
       ctx.fill();
     }
+  } else if (e.kind === 'fish') {
+    ctx.strokeStyle = `rgba(120, 200, 255, ${0.75 * (1 - t)})`;
+    ctx.lineWidth = 2;
+    for (let ring = 0; ring < 3; ring++) {
+      const r = (8 + ring * 10) * t;
+      ctx.beginPath();
+      ctx.arc(px, py + t * 6, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.fillStyle = `rgba(180, 230, 255, ${0.35 * (1 - t)})`;
+    ctx.beginPath();
+    ctx.arc(px, py + t * 4, 4 + t * 10, 0, Math.PI * 2);
+    ctx.fill();
   } else if (e.kind === 'hit_mob' || e.kind === 'hit_player') {
     // red flash on tile
     ctx.fillStyle = `rgba(255, 40, 40, ${0.4 * (1 - t)})`;
@@ -535,7 +564,7 @@ function updatePanel(s) {
       }
       slot.title = `${itemName(it.item)} x${it.qty}`;
       slot.onclick = () => {
-        if (it.item === 'berries') ws.send(JSON.stringify({ t: 'eat', slot: i }));
+        if (it.item === 'berries' || it.item === 'salmon') ws.send(JSON.stringify({ t: 'eat', slot: i }));
       };
       slot.oncontextmenu = (e) => {
         e.preventDefault();
@@ -544,7 +573,7 @@ function updatePanel(s) {
     }
     grid.appendChild(slot);
   }
-  document.getElementById('eq-list').textContent = `axe T${s.you.axe_tier || 0}, pickaxe T${s.you.pickaxe_tier || 0}`;
+  document.getElementById('eq-list').textContent = `axe T${s.you.axe_tier || 0}, pickaxe T${s.you.pickaxe_tier || 0}, rod T${s.you.rod_tier || 0}`;
   renderTrade(s);
   renderChat(s.chat || []);
 
@@ -552,6 +581,7 @@ function updatePanel(s) {
   document.getElementById('skills-list').innerHTML = `
     <div>Woodcutting: ${sk.woodcutting} <span style="color:#aaa">(${sk.woodcutting_xp} xp)</span></div>
     <div>Mining: ${sk.mining} <span style="color:#aaa">(${sk.mining_xp} xp)</span></div>
+    <div>Fishing: ${sk.fishing ?? 1} <span style="color:#aaa">(${sk.fishing_xp ?? 0} xp)</span></div>
     <div>Attack: ${sk.attack} <span style="color:#aaa">(${sk.attack_xp} xp)</span></div>
     <div>Strength: ${sk.strength} <span style="color:#aaa">(${sk.strength_xp} xp)</span></div>
     <div>Defence: ${sk.defence} <span style="color:#aaa">(${sk.defence_xp} xp)</span></div>

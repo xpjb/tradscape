@@ -59,16 +59,20 @@ enum Obj {
 
 #[derive(Clone, Copy, Serialize, PartialEq)]
 #[serde(tag = "k", rename_all = "snake_case")]
-enum Intent { None, Chop, Mine, Pick, Talk, Attack { mid: Mid } }
+enum Intent { None, Chop, Mine, Pick, Fish, Talk, Attack { mid: Mid } }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 struct Skills {
-    woodcutting: i32, mining: i32, attack: i32, strength: i32, defence: i32, hp: i32,
-    woodcutting_xp: i32, mining_xp: i32, attack_xp: i32, strength_xp: i32, defence_xp: i32, hp_xp: i32,
+    woodcutting: i32, mining: i32, fishing: i32, attack: i32, strength: i32, defence: i32, hp: i32,
+    woodcutting_xp: i32, mining_xp: i32, fishing_xp: i32, attack_xp: i32, strength_xp: i32, defence_xp: i32, hp_xp: i32,
 }
 impl Skills {
     fn starter() -> Self {
-        Self { woodcutting:1, mining:1, attack:1, strength:1, defence:1, hp:10, ..Default::default() }
+        Self {
+            woodcutting: 1, mining: 1, fishing: 1, attack: 1, strength: 1, defence: 1, hp: 10,
+            ..Default::default()
+        }
     }
 }
 
@@ -149,10 +153,41 @@ impl Game {
             ("club_goblin", 53, 22, 24, 8, 9, 6),
             ("club_goblin", 50, 48, 28, 9, 10, 7),
             ("club_goblin", 57, 51, 28, 9, 10, 7),
+            // East of dragon grove: ninja yard with berry bushes (club goblins nearby).
+            ("ninja", 46, 49, 42, 16, 17, 14),
+            ("ninja", 48, 49, 48, 18, 19, 16),
+            ("ninja", 50, 49, 42, 16, 17, 14),
+            ("ninja", 52, 49, 48, 18, 19, 16),
+            ("ninja", 54, 48, 42, 16, 17, 14),
+            ("ninja", 56, 49, 48, 18, 19, 16),
+            ("ninja", 58, 49, 42, 16, 17, 14),
+            ("ninja", 60, 50, 48, 18, 19, 16),
+            ("ninja", 62, 51, 42, 16, 17, 14),
+            ("ninja", 55, 50, 48, 18, 19, 16),
             ("ninja", 64, 10, 42, 16, 17, 14),
             ("ninja", 66, 16, 42, 16, 17, 14),
             ("ninja", 62, 58, 48, 18, 19, 16),
             ("ninja", 68, 63, 48, 18, 19, 16),
+            // Magic grove: dragons — tough but fair (~2.5× ninja hp/atk/str/def).
+            ("dragon", 31, 54, 105, 40, 43, 35),
+            ("dragon", 33, 54, 105, 40, 43, 35),
+            ("dragon", 35, 54, 120, 45, 48, 40),
+            ("dragon", 37, 54, 120, 45, 48, 40),
+            ("dragon", 39, 54, 105, 40, 43, 35),
+            ("dragon", 31, 56, 120, 45, 48, 40),
+            ("dragon", 33, 56, 105, 40, 43, 35),
+            ("dragon", 35, 56, 120, 45, 48, 40),
+            ("dragon", 37, 56, 105, 40, 43, 35),
+            ("dragon", 39, 56, 120, 45, 48, 40),
+            ("dragon", 35, 52, 120, 45, 48, 40),
+            ("dragon", 35, 58, 105, 40, 43, 35),
+            // Western cobalt desert: elite guards.
+            ("dragon", 7, 49, 105, 40, 43, 35),
+            ("dragon", 13, 49, 120, 45, 48, 40),
+            ("dragon", 10, 53, 105, 40, 43, 35),
+            ("ninja", 6, 48, 42, 16, 17, 14),
+            ("ninja", 14, 48, 48, 18, 19, 16),
+            ("ninja", 10, 45, 42, 16, 17, 14),
         ] {
             g.spawn_mob(kind, x, y, hp, atk, str_, def);
         }
@@ -235,7 +270,14 @@ fn load_player(db: &Connection, uuid: &str) -> Option<SavedPlayer> {
         |row| {
             let skills_json: String = row.get(4)?;
             let inv_json: String = row.get(5)?;
-            let skills = serde_json::from_str(&skills_json).unwrap_or_else(|_| Skills::starter());
+            let mut skills = serde_json::from_str(&skills_json).unwrap_or_else(|_| Skills::starter());
+            skills.woodcutting = level_from_xp(skills.woodcutting_xp);
+            skills.mining = level_from_xp(skills.mining_xp);
+            skills.fishing = level_from_xp(skills.fishing_xp);
+            skills.attack = level_from_xp(skills.attack_xp);
+            skills.strength = level_from_xp(skills.strength_xp);
+            skills.defence = level_from_xp(skills.defence_xp);
+            skills.hp = 10 + level_from_xp(skills.hp_xp) - 1;
             let mut inv: Vec<InvSlot> = serde_json::from_str(&inv_json).unwrap_or_else(|_| vec![InvSlot::default(); INV_SIZE]);
             inv.resize(INV_SIZE, InvSlot::default());
             Ok(SavedPlayer {
@@ -308,7 +350,37 @@ fn bfs(g: &Game, from: (i32,i32), goal: GoalKind, ignore_pid: Pid) -> Option<Vec
     None
 }
 
-fn level_from_xp(xp: i32) -> i32 { 1 + (xp / 50).min(98) }
+/// Cumulative XP needed to **reach** this combat/gathering level (level 1 ⇔ 0 XP).
+/// Each step `(L → L+1)` costs `BASE * MULT^(L-1)` — requirement grows exponentially; total XP is unbounded.
+const XP_CURVE_BASE: f64 = 50.0;
+const XP_CURVE_MULT: f64 = 1.17;
+const XP_MAX_LEVEL: i32 = 99;
+
+fn xp_threshold_for_level(level: i32) -> i64 {
+    if level <= 1 {
+        return 0;
+    }
+    let steps = (level - 1) as f64;
+    let numer = XP_CURVE_MULT.powf(steps) - 1.0;
+    let denom = XP_CURVE_MULT - 1.0;
+    (XP_CURVE_BASE * numer / denom).floor() as i64
+}
+
+/// Skill level from lifetime XP (same curve for woodcutting, mining, fishing, melee stats).
+fn level_from_xp(xp: i32) -> i32 {
+    let xp = xp.max(0) as i64;
+    let mut lo = 1i32;
+    let mut hi = XP_MAX_LEVEL;
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        if xp_threshold_for_level(mid) <= xp {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
 
 fn log_level_up(log: &mut Vec<String>, skill: &str, old_level: i32, new_level: i32) {
     if new_level > old_level {
@@ -338,29 +410,40 @@ struct ToolDef {
     power: i32,
 }
 
-const TREE_DEFS: [ResourceDef; 3] = [
+const TREE_DEFS: [ResourceDef; 4] = [
     ResourceDef { tier: 1, name: "Pine Tree", item: "pine_logs", hp: 4, xp: 20, sell: 5, req_tool_tier: 1, regrow_secs: 25 },
     ResourceDef { tier: 2, name: "Oak Tree", item: "oak_logs", hp: 10, xp: 55, sell: 50, req_tool_tier: 2, regrow_secs: 45 },
     ResourceDef { tier: 3, name: "Yew Tree", item: "yew_logs", hp: 22, xp: 130, sell: 500, req_tool_tier: 3, regrow_secs: 75 },
+    ResourceDef { tier: 4, name: "Magic Tree", item: "magic_logs", hp: 48, xp: 320, sell: 5000, req_tool_tier: 4, regrow_secs: 110 },
 ];
 
-const ROCK_DEFS: [ResourceDef; 3] = [
+const ROCK_DEFS: [ResourceDef; 4] = [
     ResourceDef { tier: 1, name: "Copper Rock", item: "copper_ore", hp: 5, xp: 25, sell: 6, req_tool_tier: 1, regrow_secs: 30 },
     ResourceDef { tier: 2, name: "Iron Rock", item: "iron_ore", hp: 12, xp: 65, sell: 60, req_tool_tier: 2, regrow_secs: 50 },
     ResourceDef { tier: 3, name: "Gold Rock", item: "gold_ore", hp: 26, xp: 150, sell: 600, req_tool_tier: 3, regrow_secs: 80 },
+    ResourceDef { tier: 4, name: "Cobalt Rock", item: "cobalt_ore", hp: 54, xp: 340, sell: 6000, req_tool_tier: 4, regrow_secs: 110 },
 ];
 
-const TOOL_DEFS: [ToolDef; 6] = [
+const TOOL_DEFS: [ToolDef; 9] = [
     ToolDef { item: "bronze_axe", name: "Bronze Axe", kind: "axe", tier: 1, buy: 10, power: 1 },
     ToolDef { item: "iron_axe", name: "Iron Axe", kind: "axe", tier: 2, buy: 200, power: 2 },
     ToolDef { item: "steel_axe", name: "Steel Axe", kind: "axe", tier: 3, buy: 4000, power: 4 },
+    ToolDef { item: "cobalt_axe", name: "Cobalt Axe", kind: "axe", tier: 4, buy: 30000, power: 8 },
     ToolDef { item: "bronze_pickaxe", name: "Bronze Pickaxe", kind: "pickaxe", tier: 1, buy: 10, power: 1 },
     ToolDef { item: "iron_pickaxe", name: "Iron Pickaxe", kind: "pickaxe", tier: 2, buy: 200, power: 2 },
     ToolDef { item: "steel_pickaxe", name: "Steel Pickaxe", kind: "pickaxe", tier: 3, buy: 4000, power: 4 },
+    ToolDef { item: "cobalt_pickaxe", name: "Cobalt Pickaxe", kind: "pickaxe", tier: 4, buy: 30000, power: 8 },
+    ToolDef { item: "fishing_rod", name: "Fishing Rod", kind: "rod", tier: 2, buy: 200, power: 0 },
 ];
 
-fn tree_def(tier: i32) -> ResourceDef { TREE_DEFS[(tier - 1).clamp(0, 2) as usize] }
-fn rock_def(tier: i32) -> ResourceDef { ROCK_DEFS[(tier - 1).clamp(0, 2) as usize] }
+fn tree_def(tier: i32) -> ResourceDef {
+    let i = (tier - 1).clamp(0, TREE_DEFS.len() as i32 - 1) as usize;
+    TREE_DEFS[i]
+}
+fn rock_def(tier: i32) -> ResourceDef {
+    let i = (tier - 1).clamp(0, ROCK_DEFS.len() as i32 - 1) as usize;
+    ROCK_DEFS[i]
+}
 
 fn item_name(item: &str) -> &'static str {
     match item {
@@ -369,9 +452,12 @@ fn item_name(item: &str) -> &'static str {
         "pine_logs" => return "Pine logs",
         "oak_logs" => return "Oak logs",
         "yew_logs" => return "Yew logs",
+        "magic_logs" => return "Magic logs",
         "copper_ore" => return "Copper ore",
         "iron_ore" => return "Iron ore",
         "gold_ore" => return "Gold ore",
+        "cobalt_ore" => return "Cobalt ore",
+        "salmon" => return "Salmon",
         _ => {}
     }
     if let Some(t) = TOOL_DEFS.iter().find(|t| t.item == item) { return t.name; }
@@ -380,6 +466,7 @@ fn item_name(item: &str) -> &'static str {
 
 fn sell_value(item: &str) -> Option<i32> {
     if item == "berries" { return Some(1); }
+    if item == "salmon" { return Some(35); }
     TREE_DEFS.iter().chain(ROCK_DEFS.iter()).find(|r| r.item == item).map(|r| r.sell)
 }
 
@@ -413,6 +500,12 @@ fn gather_success(skill: i32, resource_tier: i32) -> bool {
     rand_f() < chance
 }
 
+/// Per-tick chance to catch: **1% × Fishing level** (level 1 ⇒ 1%, level 40 ⇒ 40%).
+fn fish_bite_chance(fishing_level: i32) -> f32 {
+    let lvl = fishing_level.max(1).min(99);
+    lvl as f32 * 0.01
+}
+
 fn add_inv(p: &mut Player, item: &str, qty: i32) -> bool {
     for s in p.inv.iter_mut() {
         if s.item == item && s.qty > 0 { s.qty += qty; return true; }
@@ -443,13 +536,19 @@ fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
         attack(g, pid, mid);
         return;
     }
-    let intent = match g.obj(x, y) {
+    let mut intent = match g.obj(x, y) {
         Obj::Tree {..} => Intent::Chop,
         Obj::Rock {..} => Intent::Mine,
         Obj::Bush { berries, .. } if *berries > 0 => Intent::Pick,
         Obj::Trader => Intent::Talk,
         _ => Intent::None,
     };
+    if matches!(intent, Intent::None) && matches!(g.tile(x, y), Tile::Water) {
+        let rod_ok = g.players.get(&pid).map(|p| has_item(p, "fishing_rod")).unwrap_or(false);
+        if rod_ok {
+            intent = Intent::Fish;
+        }
+    }
     let walk_ok = g.walkable(x, y, pid);
     let p = g.players.get_mut(&pid).unwrap();
     if !matches!(intent, Intent::Talk) {
@@ -541,7 +640,7 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) {
 
     if clean == "/help" {
         push_private_chat(g, pid, "Commands: /help, /nick name");
-        push_private_chat(g, pid, "Controls: left click to walk, gather, attack, and trade. Right click the world to stop.");
+        push_private_chat(g, pid, "Controls: left click to walk, chop, mine, fish (rod + water), attack, trade. Right click to stop.");
         return;
     }
     if let Some(rest) = clean.strip_prefix("/nick ") {
@@ -580,12 +679,16 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) {
 }
 fn eat(g: &mut Game, pid: Pid, slot: usize) {
     let p = g.players.get_mut(&pid).unwrap();
-    if slot >= INV_SIZE { return; }
-    if p.inv[slot].item != "berries" || p.inv[slot].qty <= 0 { return; }
+    if slot >= INV_SIZE || p.inv[slot].qty <= 0 { return; }
+    let (amt, msg) = match p.inv[slot].item.as_str() {
+        "berries" => (3, "You eat the berries. (+3 HP)"),
+        "salmon" => (30, "You eat the salmon. (+30 HP)"),
+        _ => return,
+    };
     p.inv[slot].qty -= 1;
     if p.inv[slot].qty == 0 { p.inv[slot] = InvSlot::default(); }
-    p.hp_cur = (p.hp_cur + 3).min(p.skills.hp);
-    p.log.push("You eat the berries. (+3 HP)".into());
+    p.hp_cur = (p.hp_cur + amt).min(p.skills.hp);
+    p.log.push(msg.into());
 }
 
 fn roll_hit(atk: i32, def: i32, str_: i32) -> i32 {
@@ -600,6 +703,7 @@ fn mob_name(kind: &str) -> &'static str {
     match kind {
         "club_goblin" => "club goblin",
         "ninja" => "ninja",
+        "dragon" => "dragon",
         _ => "goblin",
     }
 }
@@ -608,6 +712,7 @@ fn mob_coin_drop(kind: &str) -> i32 {
     match kind {
         "club_goblin" => 25,
         "ninja" => 90,
+        "dragon" => 225,
         _ => 5,
     }
 }
@@ -616,6 +721,7 @@ fn mob_aggro_radius(kind: &str) -> i32 {
     match kind {
         "club_goblin" => 7,
         "ninja" => 8,
+        "dragon" => 12,
         _ => 6,
     }
 }
@@ -644,6 +750,7 @@ fn process_player(g: &mut Game, pid: Pid) {
             Intent::Chop => do_chop(g, pid, t),
             Intent::Mine => do_mine(g, pid, t),
             Intent::Pick => do_pick(g, pid, t),
+            Intent::Fish => do_fish(g, pid, t),
             Intent::Attack { mid } => do_attack(g, pid, mid),
             Intent::Talk => {
                 let p = g.players.get_mut(&pid).unwrap();
@@ -756,6 +863,47 @@ fn do_mine(g: &mut Game, pid: Pid, t: (i32,i32)) {
         p.intent = Intent::None; p.target = None;
     }
 }
+fn do_fish(g: &mut Game, pid: Pid, t: (i32,i32)) {
+    let (has_rod, level) = {
+        let p = g.players.get(&pid).unwrap();
+        (has_item(p, "fishing_rod"), p.skills.fishing)
+    };
+    if !has_rod {
+        let p = g.players.get_mut(&pid).unwrap();
+        p.log.push("You need a fishing rod.".into());
+        p.intent = Intent::None;
+        p.target = None;
+        return;
+    }
+    if !matches!(g.tile(t.0, t.1), Tile::Water) {
+        let p = g.players.get_mut(&pid).unwrap();
+        p.intent = Intent::None;
+        p.target = None;
+        return;
+    }
+    g.events.push(json!({"k":"fish","x":t.0,"y":t.1}));
+    let bite = fish_bite_chance(level);
+    if rand_f() >= bite {
+        let p = g.players.get_mut(&pid).unwrap();
+        p.log.push("The fish slips away.".into());
+        return;
+    }
+    let p = g.players.get_mut(&pid).unwrap();
+    if !add_inv(p, "salmon", 1) {
+        p.log.push("Inventory full!".into());
+        p.intent = Intent::None;
+        p.target = None;
+        return;
+    }
+    p.log.push("You catch a salmon.".into());
+    p.skills.fishing_xp += 42;
+    let old_fishing = p.skills.fishing;
+    p.skills.fishing = level_from_xp(p.skills.fishing_xp);
+    log_level_up(&mut p.log, "Fishing", old_fishing, p.skills.fishing);
+    p.intent = Intent::None;
+    p.target = None;
+}
+
 fn do_pick(g: &mut Game, pid: Pid, t: (i32,i32)) {
     let obj = g.obj(t.0, t.1).clone();
     if let Obj::Bush { berries, .. } = obj {
@@ -935,6 +1083,15 @@ fn build_map() -> (i32, i32, Vec<Tile>, Vec<Obj>) {
         // Yew groves in guarded high-tier territory.
         (60,9,3),(62,8,3),(64,9,3),(66,11,3),(68,12,3),(61,15,3),(65,16,3),(69,17,3),
         (57,58,3),(59,60,3),(61,59,3),(64,61,3),(66,62,3),(68,64,3),(60,66,3),(63,67,3),
+        // Yew ring fully encircling magic trees + dragons (single-tile gaps at N/S x=35).
+        (28,51,3),(29,51,3),(30,51,3),(31,51,3),(32,51,3),(33,51,3),(34,51,3),(36,51,3),(37,51,3),(38,51,3),(39,51,3),(40,51,3),(41,51,3),(42,51,3),
+        (28,59,3),(29,59,3),(30,59,3),(31,59,3),(32,59,3),(33,59,3),(34,59,3),(36,59,3),(37,59,3),(38,59,3),(39,59,3),(40,59,3),(41,59,3),(42,59,3),
+        (28,52,3),(28,53,3),(28,54,3),(28,55,3),(28,56,3),(28,57,3),(28,58,3),
+        (42,52,3),(42,53,3),(42,54,3),(42,55,3),(42,56,3),(42,57,3),(42,58,3),
+        // Magic trees (tier 4) — staggered grid so corridors stay walkable for mobs.
+        (30,53,4),(32,53,4),(34,53,4),(36,53,4),(38,53,4),(40,53,4),
+        (30,55,4),(32,55,4),(34,55,4),(36,55,4),(38,55,4),(40,55,4),
+        (30,57,4),(32,57,4),(34,57,4),(36,57,4),(38,57,4),(40,57,4),
     ];
     for (x, y, tier) in trees {
         objects[idx(x, y)] = Obj::Tree { tier, hp: tree_def(tier).hp };
@@ -949,12 +1106,23 @@ fn build_map() -> (i32, i32, Vec<Tile>, Vec<Obj>) {
         // Gold veins deep in ninja territory.
         (58,5,3),(61,5,3),(64,6,3),(67,7,3),(69,9,3),(57,12,3),(70,15,3),
         (58,52,3),(61,53,3),(65,54,3),(68,56,3),(57,62,3),(70,63,3),(66,67,3),
+        // Cobalt seams on the western desert (tier 4 — cobalt pickaxe).
+        (8,46,4),(10,46,4),(12,46,4),(9,49,4),(11,49,4),(8,52,4),
     ];
     for (x, y, tier) in rocks {
         objects[idx(x, y)] = Obj::Rock { tier, hp: rock_def(tier).hp };
     }
 
-    let bushes = [(22,18),(18,22),(24,20),(19,16),(11,11),(13,17),(21,21),(45,45),(52,16),(62,57)];
+    let bushes = [
+        (22,18),(18,22),(24,20),(19,16),(11,11),(13,17),(21,21),(45,45),(52,16),
+        // Dense berry yard east of the dragon grove (west of gold wastes).
+        (43,52),(43,53),(43,54),(44,51),(44,53),(44,54),(44,55),(45,52),(45,53),(45,54),(46,51),(46,52),(46,53),(46,54),(46,55),
+        (47,52),(47,53),(47,54),(48,51),(48,52),(48,53),(48,54),(49,51),(49,52),(49,53),(49,54),(50,51),(50,53),(50,54),
+        (51,52),(51,53),(51,54),(52,52),(52,53),(52,54),(53,51),(53,52),(53,53),(53,54),(54,51),(54,52),(54,53),(54,54),
+        (52,56),(53,56),(54,56),(54,55),(55,52),(55,53),(55,54),(55,55),(56,51),(56,53),(56,54),(57,52),(57,53),(57,54),
+        (58,53),(58,54),(59,51),(59,52),(59,53),(59,54),(60,52),(60,53),(60,55),(61,52),(61,54),(61,56),(62,53),(62,55),(62,57),
+        (63,52),(63,53),(63,54),
+    ];
     for (x, y) in bushes { objects[idx(x, y)] = Obj::Bush { berries: 3, regrow: 0 }; }
 
     let boulders = [
@@ -1001,6 +1169,7 @@ fn sell_catalog() -> Vec<Value> {
         "xp": r.xp,
     })));
     out.push(json!({ "item": "berries", "name": "Berries", "tier": 1, "sell": 1, "xp": 0 }));
+    out.push(json!({ "item": "salmon", "name": "Salmon", "tier": 2, "sell": 35, "xp": 42 }));
     out
 }
 
@@ -1008,6 +1177,7 @@ fn build_state_msg(g: &Game, pid: Pid) -> String {
     let p = &g.players[&pid];
     let axe_tier = best_tool(p, "axe").map(|t| t.tier).unwrap_or(0);
     let pickaxe_tier = best_tool(p, "pickaxe").map(|t| t.tier).unwrap_or(0);
+    let rod_tier = best_tool(p, "rod").map(|t| t.tier).unwrap_or(0);
     let players: Vec<Value> = g.players.values().map(|q| json!({
         "id": q.id, "x": q.x, "y": q.y, "name": q.name, "hp": q.hp_cur, "hp_max": q.skills.hp
     })).collect();
@@ -1019,7 +1189,7 @@ fn build_state_msg(g: &Game, pid: Pid) -> String {
     json!({
         "t": "state", "tick": g.tick, "tick_ms": TICK_MS,
         "you": { "id": p.id, "x": p.x, "y": p.y, "hp": p.hp_cur, "skills": p.skills,
-                 "inv": p.inv, "axe_tier": axe_tier, "pickaxe_tier": pickaxe_tier,
+                 "inv": p.inv, "axe_tier": axe_tier, "pickaxe_tier": pickaxe_tier, "rod_tier": rod_tier,
                  "intent": p.intent, "target": p.target, "trade_open": p.trade_open && near_trader(g, pid) },
         "players": players, "mobs": mobs, "objects": g.objects, "log": p.log,
         "shop": shop_catalog(), "sells": sell_catalog(),
