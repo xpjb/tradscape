@@ -28,7 +28,7 @@ const OBJ_IMG = {
   rock: 'entities/rock.png', rock_tier_1: 'entities/rock_copper.png', rock_tier_2: 'entities/rock_iron.png', rock_tier_3: 'entities/rock_gold.png', rock_tier_4: 'entities/rock_cobalt.png',
   depleted_rock: 'entities/rock_depleted.png',
   bush: 'entities/berry_bush.png', bush_empty: 'entities/berry_bush_empty.png',
-  boulder: 'entities/boulder.png', trader: 'entities/trader.png',
+  boulder: 'entities/boulder.png', trader: 'entities/trader.png', angel: 'entities/angel.png',
 };
 const MOB_IMG = {
   goblin: 'entities/goblin.png',
@@ -45,7 +45,7 @@ const ITEM_IMG = {
   fishing_rod: 'items/fishing_rod.png',
 };
 const TILE_COLOR = { grass: '#3a7d2c', dirt: '#7a5a3b', sand: '#d9c787', water: '#2a5fb0', stone: '#888', path: '#a99a82' };
-const OBJ_COLOR  = { tree: '#1f5417', stump: '#5a3a1f', rock: '#666', depleted_rock: '#aaa', bush: '#7a3', boulder: '#777', trader: '#c0a060' };
+const OBJ_COLOR  = { tree: '#1f5417', stump: '#5a3a1f', rock: '#666', depleted_rock: '#aaa', bush: '#7a3', boulder: '#777', trader: '#c0a060', angel: '#e8e8ff' };
 const MOB_COLOR  = { goblin: '#7caa3c', club_goblin: '#6b8f2a', ninja: '#2b2b35', dragon: '#8b2222' };
 const MOB_LABEL = { goblin: 'G', club_goblin: 'C', ninja: 'N', dragon: 'D' };
 const WALKABLE_OBJ = new Set(['none']);
@@ -529,6 +529,17 @@ document.getElementById('trade-close').onclick = () => {
   ws.send(JSON.stringify({ t: 'close_trade' }));
 };
 
+function closeAngelModal() {
+  document.getElementById('angel-window').classList.add('hidden');
+  ws.send(JSON.stringify({ t: 'angel_decline' }));
+}
+
+document.getElementById('angel-close').onclick = closeAngelModal;
+document.getElementById('angel-no').onclick = closeAngelModal;
+document.getElementById('angel-yes').onclick = () => {
+  ws.send(JSON.stringify({ t: 'angel_confirm' }));
+};
+
 document.getElementById('chat-form').onsubmit = (e) => {
   e.preventDefault();
   const input = document.getElementById('chat-input');
@@ -539,6 +550,9 @@ document.getElementById('chat-form').onsubmit = (e) => {
 };
 
 function updatePanel(s) {
+  const sk = s.you.skills;
+  const hpCur = s.you.hp;
+  const hpMax = sk.hp;
   const grid = document.getElementById('inv-grid');
   grid.innerHTML = '';
   for (let i = 0; i < 28; i++) {
@@ -564,7 +578,9 @@ function updatePanel(s) {
       }
       slot.title = `${itemName(it.item)} x${it.qty}`;
       slot.onclick = () => {
-        if (it.item === 'berries' || it.item === 'salmon') ws.send(JSON.stringify({ t: 'eat', slot: i }));
+        if (it.item !== 'berries' && it.item !== 'salmon') return;
+        if (hpCur >= hpMax) return;
+        ws.send(JSON.stringify({ t: 'eat', slot: i }));
       };
       slot.oncontextmenu = (e) => {
         e.preventDefault();
@@ -575,10 +591,13 @@ function updatePanel(s) {
   }
   document.getElementById('eq-list').textContent = `axe T${s.you.axe_tier || 0}, pickaxe T${s.you.pickaxe_tier || 0}, rod T${s.you.rod_tier || 0}`;
   renderTrade(s);
+  renderAngelModal(s);
   renderChat(s.chat || []);
 
-  const sk = s.you.skills;
+  const ap = sk.angel_points ?? 0;
   document.getElementById('skills-list').innerHTML = `
+    <div>Angel points: ${ap} <span style="color:#aaa">(+${ap}% XP rate)</span></div>
+    <hr style="margin:8px 0;border-color:#444">
     <div>Woodcutting: ${sk.woodcutting} <span style="color:#aaa">(${sk.woodcutting_xp} xp)</span></div>
     <div>Mining: ${sk.mining} <span style="color:#aaa">(${sk.mining_xp} xp)</span></div>
     <div>Fishing: ${sk.fishing ?? 1} <span style="color:#aaa">(${sk.fishing_xp ?? 0} xp)</span></div>
@@ -588,6 +607,12 @@ function updatePanel(s) {
     <div>HP: ${sk.hp} <span style="color:#aaa">(${sk.hp_xp} xp)</span></div>`;
   document.getElementById('hp-cur').textContent = s.you.hp;
   document.getElementById('hp-max').textContent = sk.hp;
+}
+
+function renderAngelModal(s) {
+  const win = document.getElementById('angel-window');
+  if (!win) return;
+  win.classList.toggle('hidden', !s.you.angel_modal_open);
 }
 
 function renderTrade(s) {

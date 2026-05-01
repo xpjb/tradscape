@@ -129,6 +129,49 @@ body {
   font-weight: bold;
   margin-bottom: 8px;
 }
+.window-card-narrow {
+  width: min(440px, calc(100vw - 32px));
+}
+.angel-dialog {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #e8d9b8;
+}
+.hint-block {
+  font-size: 13px;
+  color: #c9baa3;
+}
+.angel-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.angel-btn {
+  background: #5a4a36;
+  color: #e8d9b8;
+  border: 1px solid #8b6f47;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 8px 18px;
+  font-size: 14px;
+}
+.angel-btn:hover {
+  background: #8b6f47;
+}
+#angel-close {
+  background: #5a4a36;
+  color: #e8d9b8;
+  border: 1px solid #8b6f47;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+#angel-close:hover {
+  background: #8b6f47;
+}
 #trade-close,
 #chat-form button {
   background: #5a4a36;

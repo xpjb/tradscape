@@ -22,6 +22,8 @@ const TICK_MS: u64 = 200;
 const TPS: u64 = 1000 / TICK_MS;
 const INV_SIZE: usize = 28;
 const DB_PATH: &str = "tradscape.sqlite3";
+/// Ocean columns west of the original 74-wide map; legacy map X is shifted by this offset.
+const MAP_WEST_PAD: i32 = 18;
 
 type Pid = u64;
 type Mid = u64;
@@ -55,6 +57,7 @@ enum Obj {
     Bush { berries: i32, regrow: u64 },
     Boulder,
     Trader,
+    Angel,
 }
 
 #[derive(Clone, Copy, Serialize, PartialEq)]
@@ -66,11 +69,13 @@ enum Intent { None, Chop, Mine, Pick, Fish, Talk, Attack { mid: Mid } }
 struct Skills {
     woodcutting: i32, mining: i32, fishing: i32, attack: i32, strength: i32, defence: i32, hp: i32,
     woodcutting_xp: i32, mining_xp: i32, fishing_xp: i32, attack_xp: i32, strength_xp: i32, defence_xp: i32, hp_xp: i32,
+    angel_points: i32,
 }
 impl Skills {
     fn starter() -> Self {
         Self {
             woodcutting: 1, mining: 1, fishing: 1, attack: 1, strength: 1, defence: 1, hp: 10,
+            angel_points: 0,
             ..Default::default()
         }
     }
@@ -98,6 +103,7 @@ struct Player {
     target: Option<(i32,i32)>,
     intent: Intent,
     trade_open: bool,
+    angel_modal_open: bool,
     private_chat: Vec<ChatMsg>,
     log: Vec<String>,
     tx: mpsc::UnboundedSender<String>,
@@ -107,7 +113,7 @@ impl Player {
     fn new(id: Pid, uuid: String, name: String, x: i32, y: i32, tx: mpsc::UnboundedSender<String>) -> Self {
         let inv = vec![InvSlot::default(); INV_SIZE];
         Self { id, uuid, name, x, y, hp_cur: 10, skills: Skills::starter(), inv,
-               target: None, intent: Intent::None, trade_open: false,
+               target: None, intent: Intent::None, trade_open: false, angel_modal_open: false,
                private_chat: vec![], log: vec![], tx, regen_ctr: 0 }
     }
 }
@@ -145,49 +151,56 @@ impl Game {
             tick: 0, next_mid: 1, chat_seq: 0, chat: VecDeque::new(), events: Vec::new(),
         };
         for (kind, x, y, hp, atk, str_, def) in [
-            ("goblin", 10, 10, 7, 2, 2, 1),
-            ("goblin", 30, 24, 7, 2, 2, 1),
-            ("goblin", 12, 32, 7, 2, 2, 1),
-            ("goblin", 26, 35, 12, 4, 4, 3),
-            ("club_goblin", 47, 18, 24, 8, 9, 6),
-            ("club_goblin", 53, 22, 24, 8, 9, 6),
-            ("club_goblin", 50, 48, 28, 9, 10, 7),
-            ("club_goblin", 57, 51, 28, 9, 10, 7),
+            ("goblin", 10 + MAP_WEST_PAD, 10, 7, 2, 2, 1),
+            ("goblin", 30 + MAP_WEST_PAD, 24, 7, 2, 2, 1),
+            ("goblin", 12 + MAP_WEST_PAD, 32, 7, 2, 2, 1),
+            ("goblin", 26 + MAP_WEST_PAD, 35, 12, 4, 4, 3),
+            // Tier 2 peninsula west (same stats as east dirt camp); tip max-west into new ocean.
+            ("club_goblin", 2, 18, 24, 8, 9, 6),
+            ("club_goblin", 3, 18, 24, 8, 9, 6),
+            ("club_goblin", 4, 18, 24, 8, 9, 6),
+            ("club_goblin", 5, 18, 24, 8, 9, 6),
+            ("club_goblin", 6, 18, 24, 8, 9, 6),
+            ("club_goblin", 7, 18, 24, 8, 9, 6),
+            ("club_goblin", 47 + MAP_WEST_PAD, 18, 24, 8, 9, 6),
+            ("club_goblin", 53 + MAP_WEST_PAD, 22, 24, 8, 9, 6),
+            ("club_goblin", 50 + MAP_WEST_PAD, 48, 28, 9, 10, 7),
+            ("club_goblin", 57 + MAP_WEST_PAD, 51, 28, 9, 10, 7),
             // East of dragon grove: ninja yard with berry bushes (club goblins nearby).
-            ("ninja", 46, 49, 42, 16, 17, 14),
-            ("ninja", 48, 49, 48, 18, 19, 16),
-            ("ninja", 50, 49, 42, 16, 17, 14),
-            ("ninja", 52, 49, 48, 18, 19, 16),
-            ("ninja", 54, 48, 42, 16, 17, 14),
-            ("ninja", 56, 49, 48, 18, 19, 16),
-            ("ninja", 58, 49, 42, 16, 17, 14),
-            ("ninja", 60, 50, 48, 18, 19, 16),
-            ("ninja", 62, 51, 42, 16, 17, 14),
-            ("ninja", 55, 50, 48, 18, 19, 16),
-            ("ninja", 64, 10, 42, 16, 17, 14),
-            ("ninja", 66, 16, 42, 16, 17, 14),
-            ("ninja", 62, 58, 48, 18, 19, 16),
-            ("ninja", 68, 63, 48, 18, 19, 16),
+            ("ninja", 46 + MAP_WEST_PAD, 49, 42, 16, 17, 14),
+            ("ninja", 48 + MAP_WEST_PAD, 49, 48, 18, 19, 16),
+            ("ninja", 50 + MAP_WEST_PAD, 49, 42, 16, 17, 14),
+            ("ninja", 52 + MAP_WEST_PAD, 49, 48, 18, 19, 16),
+            ("ninja", 54 + MAP_WEST_PAD, 48, 42, 16, 17, 14),
+            ("ninja", 56 + MAP_WEST_PAD, 49, 48, 18, 19, 16),
+            ("ninja", 58 + MAP_WEST_PAD, 49, 42, 16, 17, 14),
+            ("ninja", 60 + MAP_WEST_PAD, 50, 48, 18, 19, 16),
+            ("ninja", 62 + MAP_WEST_PAD, 51, 42, 16, 17, 14),
+            ("ninja", 55 + MAP_WEST_PAD, 50, 48, 18, 19, 16),
+            ("ninja", 64 + MAP_WEST_PAD, 10, 42, 16, 17, 14),
+            ("ninja", 66 + MAP_WEST_PAD, 16, 42, 16, 17, 14),
+            ("ninja", 62 + MAP_WEST_PAD, 58, 48, 18, 19, 16),
+            ("ninja", 68 + MAP_WEST_PAD, 63, 48, 18, 19, 16),
             // Magic grove: dragons — tough but fair (~2.5× ninja hp/atk/str/def).
-            ("dragon", 31, 54, 105, 40, 43, 35),
-            ("dragon", 33, 54, 105, 40, 43, 35),
-            ("dragon", 35, 54, 120, 45, 48, 40),
-            ("dragon", 37, 54, 120, 45, 48, 40),
-            ("dragon", 39, 54, 105, 40, 43, 35),
-            ("dragon", 31, 56, 120, 45, 48, 40),
-            ("dragon", 33, 56, 105, 40, 43, 35),
-            ("dragon", 35, 56, 120, 45, 48, 40),
-            ("dragon", 37, 56, 105, 40, 43, 35),
-            ("dragon", 39, 56, 120, 45, 48, 40),
-            ("dragon", 35, 52, 120, 45, 48, 40),
-            ("dragon", 35, 58, 105, 40, 43, 35),
+            ("dragon", 31 + MAP_WEST_PAD, 54, 105, 40, 43, 35),
+            ("dragon", 33 + MAP_WEST_PAD, 54, 105, 40, 43, 35),
+            ("dragon", 35 + MAP_WEST_PAD, 54, 120, 45, 48, 40),
+            ("dragon", 37 + MAP_WEST_PAD, 54, 120, 45, 48, 40),
+            ("dragon", 39 + MAP_WEST_PAD, 54, 105, 40, 43, 35),
+            ("dragon", 31 + MAP_WEST_PAD, 56, 120, 45, 48, 40),
+            ("dragon", 33 + MAP_WEST_PAD, 56, 105, 40, 43, 35),
+            ("dragon", 35 + MAP_WEST_PAD, 56, 120, 45, 48, 40),
+            ("dragon", 37 + MAP_WEST_PAD, 56, 105, 40, 43, 35),
+            ("dragon", 39 + MAP_WEST_PAD, 56, 120, 45, 48, 40),
+            ("dragon", 35 + MAP_WEST_PAD, 52, 120, 45, 48, 40),
+            ("dragon", 35 + MAP_WEST_PAD, 58, 105, 40, 43, 35),
             // Western cobalt desert: elite guards.
-            ("dragon", 7, 49, 105, 40, 43, 35),
-            ("dragon", 13, 49, 120, 45, 48, 40),
-            ("dragon", 10, 53, 105, 40, 43, 35),
-            ("ninja", 6, 48, 42, 16, 17, 14),
-            ("ninja", 14, 48, 48, 18, 19, 16),
-            ("ninja", 10, 45, 42, 16, 17, 14),
+            ("dragon", 7 + MAP_WEST_PAD, 49, 105, 40, 43, 35),
+            ("dragon", 13 + MAP_WEST_PAD, 49, 120, 45, 48, 40),
+            ("dragon", 10 + MAP_WEST_PAD, 53, 105, 40, 43, 35),
+            ("ninja", 6 + MAP_WEST_PAD, 48, 42, 16, 17, 14),
+            ("ninja", 14 + MAP_WEST_PAD, 48, 48, 18, 19, 16),
+            ("ninja", 10 + MAP_WEST_PAD, 45, 42, 16, 17, 14),
         ] {
             g.spawn_mob(kind, x, y, hp, atk, str_, def);
         }
@@ -244,6 +257,17 @@ fn open_db() -> Connection {
             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
         );"
     ).expect("create players table");
+    let ver: i32 = db
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap_or(0);
+    if ver < 1 {
+        // Shift saved positions east once — map gained MAP_WEST_PAD columns west (legacy width was 74).
+        let _ = db.execute(
+            "UPDATE players SET x = x + ?1 WHERE x <= ?2",
+            params![MAP_WEST_PAD, 73_i32],
+        );
+        let _ = db.execute_batch("PRAGMA user_version = 1");
+    }
     db
 }
 
@@ -478,6 +502,26 @@ fn item_value(item: &str) -> Option<i32> {
     buy_price(item).or_else(|| sell_value(item))
 }
 
+fn xp_with_bonus(base: i32, angel_points: i32) -> i32 {
+    ((base as f64) * (1.0 + angel_points as f64 * 0.01)).round() as i32
+}
+
+fn inventory_gp_value(p: &Player) -> i64 {
+    let mut sum = 0i64;
+    for s in &p.inv {
+        if s.qty <= 0 || s.item.is_empty() {
+            continue;
+        }
+        let unit = if s.item == "coins" {
+            1i64
+        } else {
+            item_value(&s.item).unwrap_or(0) as i64
+        };
+        sum += unit * s.qty as i64;
+    }
+    sum
+}
+
 fn tool_def(item: &str) -> Option<ToolDef> {
     TOOL_DEFS.iter().find(|t| t.item == item).copied()
 }
@@ -536,11 +580,13 @@ fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
         attack(g, pid, mid);
         return;
     }
-    let mut intent = match g.obj(x, y) {
-        Obj::Tree {..} => Intent::Chop,
-        Obj::Rock {..} => Intent::Mine,
+    let clicked_obj = g.obj(x, y).clone();
+    let mut intent = match &clicked_obj {
+        Obj::Tree { .. } => Intent::Chop,
+        Obj::Rock { .. } => Intent::Mine,
         Obj::Bush { berries, .. } if *berries > 0 => Intent::Pick,
         Obj::Trader => Intent::Talk,
+        Obj::Angel => Intent::Talk,
         _ => Intent::None,
     };
     if matches!(intent, Intent::None) && matches!(g.tile(x, y), Tile::Water) {
@@ -553,6 +599,17 @@ fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
     let p = g.players.get_mut(&pid).unwrap();
     if !matches!(intent, Intent::Talk) {
         p.trade_open = false;
+        p.angel_modal_open = false;
+    } else {
+        match clicked_obj {
+            Obj::Trader => {
+                p.angel_modal_open = false;
+            }
+            Obj::Angel => {
+                p.trade_open = false;
+            }
+            _ => {}
+        }
     }
     if matches!(intent, Intent::None) {
         if walk_ok { p.target = Some((x, y)); p.intent = Intent::None; }
@@ -568,6 +625,7 @@ fn attack(g: &mut Game, pid: Pid, mid: Mid) {
     if m.respawn_at.is_some() { return; }
     let p = g.players.get_mut(&pid).unwrap();
     p.trade_open = false;
+    p.angel_modal_open = false;
     p.intent = Intent::Attack { mid };
     p.target = Some((m.x, m.y));
 }
@@ -579,6 +637,51 @@ fn near_trader(g: &Game, pid: Pid) -> bool {
         if g.in_b(nx, ny) && matches!(g.obj(nx, ny), Obj::Trader) { return true; }
     }}
     false
+}
+
+fn near_angel(g: &Game, pid: Pid) -> bool {
+    let p = &g.players[&pid];
+    for dy in -1..=1i32 {
+        for dx in -1..=1i32 {
+            let nx = p.x + dx;
+            let ny = p.y + dy;
+            if g.in_b(nx, ny) && matches!(g.obj(nx, ny), Obj::Angel) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn angel_decline(g: &mut Game, pid: Pid) {
+    if let Some(p) = g.players.get_mut(&pid) {
+        p.angel_modal_open = false;
+    }
+}
+
+fn angel_sacrifice(g: &mut Game, pid: Pid) {
+    if !near_angel(g, pid) {
+        if let Some(p) = g.players.get_mut(&pid) {
+            p.log.push("Stand next to the angel.".into());
+        }
+        return;
+    }
+    let p = g.players.get_mut(&pid).unwrap();
+    let gp = inventory_gp_value(p);
+    let gain = (gp / 1000) as i32;
+    let new_points = p.skills.angel_points.saturating_add(gain);
+    p.inv = vec![InvSlot::default(); INV_SIZE];
+    p.skills = Skills::starter();
+    p.skills.angel_points = new_points;
+    p.hp_cur = p.skills.hp;
+    p.intent = Intent::None;
+    p.target = None;
+    p.trade_open = false;
+    p.angel_modal_open = false;
+    p.log.push(format!(
+        "Your inventory is sacrificed ({} GP). You gain {} angel points. All levels reset. Angel points grant +1% XP each.",
+        gp, gain
+    ));
 }
 
 fn buy(g: &mut Game, pid: Pid, item: &str) {
@@ -680,6 +783,10 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) {
 fn eat(g: &mut Game, pid: Pid, slot: usize) {
     let p = g.players.get_mut(&pid).unwrap();
     if slot >= INV_SIZE || p.inv[slot].qty <= 0 { return; }
+    if p.hp_cur >= p.skills.hp {
+        p.log.push("You're already at full health.".into());
+        return;
+    }
     let (amt, msg) = match p.inv[slot].item.as_str() {
         "berries" => (3, "You eat the berries. (+3 HP)"),
         "salmon" => (30, "You eat the salmon. (+30 HP)"),
@@ -719,9 +826,7 @@ fn mob_coin_drop(kind: &str) -> i32 {
 
 fn mob_aggro_radius(kind: &str) -> i32 {
     match kind {
-        "club_goblin" => 7,
         "ninja" => 8,
-        "dragon" => 12,
         _ => 6,
     }
 }
@@ -753,8 +858,19 @@ fn process_player(g: &mut Game, pid: Pid) {
             Intent::Fish => do_fish(g, pid, t),
             Intent::Attack { mid } => do_attack(g, pid, mid),
             Intent::Talk => {
+                let talk_obj = g.obj(t.0, t.1).clone();
                 let p = g.players.get_mut(&pid).unwrap();
-                p.trade_open = true;
+                match talk_obj {
+                    Obj::Trader => {
+                        p.trade_open = true;
+                        p.angel_modal_open = false;
+                    }
+                    Obj::Angel => {
+                        p.angel_modal_open = true;
+                        p.trade_open = false;
+                    }
+                    _ => {}
+                }
                 p.intent = Intent::None;
                 p.target = None;
             }
@@ -808,7 +924,8 @@ fn do_chop(g: &mut Game, pid: Pid, t: (i32,i32)) {
             let p = g.players.get_mut(&pid).unwrap();
             if add_inv(p, def.item, 1) { p.log.push(format!("You get {}.", item_name(def.item))); }
             else { p.log.push("Inventory full!".into()); }
-            p.skills.woodcutting_xp += def.xp;
+            let ap = p.skills.angel_points;
+            p.skills.woodcutting_xp += xp_with_bonus(def.xp, ap);
             p.skills.woodcutting = level_from_xp(p.skills.woodcutting_xp);
             log_level_up(&mut p.log, "Woodcutting", level, p.skills.woodcutting);
             p.intent = Intent::None; p.target = None;
@@ -851,7 +968,8 @@ fn do_mine(g: &mut Game, pid: Pid, t: (i32,i32)) {
             let p = g.players.get_mut(&pid).unwrap();
             if add_inv(p, def.item, 1) { p.log.push(format!("You mine {}.", item_name(def.item))); }
             else { p.log.push("Inventory full!".into()); }
-            p.skills.mining_xp += def.xp;
+            let ap = p.skills.angel_points;
+            p.skills.mining_xp += xp_with_bonus(def.xp, ap);
             p.skills.mining = level_from_xp(p.skills.mining_xp);
             log_level_up(&mut p.log, "Mining", level, p.skills.mining);
             p.intent = Intent::None; p.target = None;
@@ -896,7 +1014,8 @@ fn do_fish(g: &mut Game, pid: Pid, t: (i32,i32)) {
         return;
     }
     p.log.push("You catch a salmon.".into());
-    p.skills.fishing_xp += 42;
+    let ap = p.skills.angel_points;
+    p.skills.fishing_xp += xp_with_bonus(42, ap);
     let old_fishing = p.skills.fishing;
     p.skills.fishing = level_from_xp(p.skills.fishing_xp);
     log_level_up(&mut p.log, "Fishing", old_fishing, p.skills.fishing);
@@ -949,18 +1068,15 @@ fn do_attack(g: &mut Game, pid: Pid, mid: Mid) {
     } else {
         format!("You hit the {} for {}.", mob_name(&kind), dmg)
     });
-    p.skills.attack_xp += 8 + dmg * 4;
+    let ap = p.skills.angel_points;
+    p.skills.attack_xp += xp_with_bonus(8 + dmg * 4, ap);
     let old_attack = p.skills.attack;
     p.skills.attack = level_from_xp(p.skills.attack_xp);
-    p.skills.strength_xp += dmg * 4;
+    p.skills.strength_xp += xp_with_bonus(dmg * 4, ap);
     let old_strength = p.skills.strength;
     p.skills.strength = level_from_xp(p.skills.strength_xp);
-    p.skills.hp_xp += dmg;
-    let old_hp = p.skills.hp;
-    p.skills.hp = 10 + level_from_xp(p.skills.hp_xp) - 1;
     log_level_up(&mut p.log, "Attack", old_attack, p.skills.attack);
     log_level_up(&mut p.log, "Strength", old_strength, p.skills.strength);
-    log_level_up(&mut p.log, "HP", old_hp, p.skills.hp);
     if killed {
         p.log.push(format!("You kill the {}!", mob_name(&kind)));
         add_inv(p, "coins", mob_coin_drop(&kind));
@@ -1000,10 +1116,18 @@ fn process_mob(g: &mut Game, mid: Mid) {
         } else {
             format!("The {} hits you for {}.", mob_name(&kind), dmg)
         });
-        p.skills.defence_xp += 4;
-        let old_defence = p.skills.defence;
-        p.skills.defence = level_from_xp(p.skills.defence_xp);
-        log_level_up(&mut p.log, "Defence", old_defence, p.skills.defence);
+        let ap = p.skills.angel_points;
+        if dmg == 0 {
+            p.skills.defence_xp += xp_with_bonus(8, ap);
+            let old_defence = p.skills.defence;
+            p.skills.defence = level_from_xp(p.skills.defence_xp);
+            log_level_up(&mut p.log, "Defence", old_defence, p.skills.defence);
+        } else {
+            p.skills.hp_xp += xp_with_bonus(dmg, ap);
+            let old_hp = p.skills.hp;
+            p.skills.hp = 10 + level_from_xp(p.skills.hp_xp) - 1;
+            log_level_up(&mut p.log, "HP", old_hp, p.skills.hp);
+        }
         if matches!(p.intent, Intent::None) && p.hp_cur > 0 {
             p.intent = Intent::Attack { mid };
             p.target = Some((pos.0, pos.1));
@@ -1011,8 +1135,8 @@ fn process_mob(g: &mut Game, mid: Mid) {
         if p.hp_cur == 0 {
             p.log.push("You die! Respawning...".into());
             p.hp_cur = p.skills.hp;
-            p.x = 20; p.y = 20;
-            p.intent = Intent::None; p.target = None; p.trade_open = false;
+            p.x = 20 + MAP_WEST_PAD; p.y = 20;
+            p.intent = Intent::None; p.target = None; p.trade_open = false; p.angel_modal_open = false;
         }
     } else if let Some(mut path) = bfs(g, pos, GoalKind::Adjacent((tx, ty)), 0) {
         if let Some(step) = path.pop_front() {
@@ -1051,26 +1175,53 @@ fn tick_world(g: &mut Game) {
 }
 
 fn build_map() -> (i32, i32, Vec<Tile>, Vec<Obj>) {
-    let w: i32 = 74; let h: i32 = 74;
+    let w: i32 = 74 + MAP_WEST_PAD;
+    let h: i32 = 74;
     let mut tiles = vec![Tile::Grass; (w * h) as usize];
     let mut objects = vec![Obj::None; (w * h) as usize];
-    let idx = |x: i32, y: i32| (y * w + x) as usize;
-    for x in 0..w { tiles[idx(x, 0)] = Tile::Water; tiles[idx(x, h - 1)] = Tile::Water; }
-    for y in 0..h { tiles[idx(0, y)] = Tile::Water; tiles[idx(w - 1, y)] = Tile::Water; }
+    let ix = |lx: i32, y: i32| (y * w + (lx + MAP_WEST_PAD)) as usize;
+    let ax = |x: i32, y: i32| (y * w + x) as usize;
 
-    // Distinct regions: starter village, mid-tier camps, and high-tier guarded outskirts.
-    for y in 4..20 { for x in 56..71 { tiles[idx(x, y)] = Tile::Stone; } }
-    for y in 48..70 { for x in 55..71 { tiles[idx(x, y)] = Tile::Stone; } }
-    for y in 42..58 { for x in 4..21 { tiles[idx(x, y)] = Tile::Sand; } }
-    for y in 12..28 { for x in 42..57 { tiles[idx(x, y)] = Tile::Dirt; } }
-    for y in 42..56 { for x in 44..59 { tiles[idx(x, y)] = Tile::Dirt; } }
-    for dy in -1..=1i32 { for dx in -1..=1i32 { tiles[idx(20 + dx, 18 + dy)] = Tile::Dirt; } }
-    for x in 8..66 { tiles[idx(x, 19)] = Tile::Path; }
-    for y in 10..64 { tiles[idx(20, y)] = Tile::Path; }
-    for x in 20..63 { tiles[idx(x, 45)] = Tile::Path; }
-    for y in 19..46 { tiles[idx(49, y)] = Tile::Path; }
-    for y in 9..20 { tiles[idx(62, y)] = Tile::Path; }
-    for y in 45..64 { tiles[idx(63, y)] = Tile::Path; }
+    for x in 0..w {
+        tiles[ax(x, 0)] = Tile::Water;
+        tiles[ax(x, h - 1)] = Tile::Water;
+    }
+    for y in 0..h {
+        tiles[ax(w - 1, y)] = Tile::Water;
+    }
+    // Deep western ocean (peninsula tiles overwritten below).
+    for y in 1..h - 1 {
+        for x in 0..MAP_WEST_PAD {
+            tiles[ax(x, y)] = Tile::Water;
+        }
+    }
+
+    // Distinct regions: starter village, mid-tier camps, and high-tier guarded outskirts (legacy coords).
+    for y in 4..20 { for x in 56..71 { tiles[ix(x, y)] = Tile::Stone; } }
+    for y in 48..70 { for x in 55..71 { tiles[ix(x, y)] = Tile::Stone; } }
+    for y in 42..58 { for x in 4..21 { tiles[ix(x, y)] = Tile::Sand; } }
+    for y in 12..28 { for x in 42..57 { tiles[ix(x, y)] = Tile::Dirt; } }
+    for y in 42..56 { for x in 44..59 { tiles[ix(x, y)] = Tile::Dirt; } }
+    for dy in -1..=1i32 { for dx in -1..=1i32 { tiles[ix(20 + dx, 18 + dy)] = Tile::Dirt; } }
+    for x in 8..66 { tiles[ix(x, 19)] = Tile::Path; }
+    for y in 10..64 { tiles[ix(20, y)] = Tile::Path; }
+    for x in 20..63 { tiles[ix(x, 45)] = Tile::Path; }
+    for y in 19..46 { tiles[ix(49, y)] = Tile::Path; }
+    for y in 9..20 { tiles[ix(62, y)] = Tile::Path; }
+    for y in 45..64 { tiles[ix(63, y)] = Tile::Path; }
+
+    // Original west coast (legacy x = 0): ocean unless the peninsula replaces tiles here.
+    for y in 1..h - 1 {
+        tiles[ax(MAP_WEST_PAD, y)] = Tile::Water;
+    }
+    // Tier-2 club goblin peninsula — dirt into extended western ocean (spawn latitude).
+    for y in 14..=22 {
+        let d = i32::abs(y - 18);
+        let min_x = 2 + d * 2;
+        for x in min_x..=MAP_WEST_PAD {
+            tiles[ax(x, y)] = Tile::Dirt;
+        }
+    }
 
     let trees = [
         // Starter pine woods near spawn.
@@ -1094,7 +1245,7 @@ fn build_map() -> (i32, i32, Vec<Tile>, Vec<Obj>) {
         (30,57,4),(32,57,4),(34,57,4),(36,57,4),(38,57,4),(40,57,4),
     ];
     for (x, y, tier) in trees {
-        objects[idx(x, y)] = Obj::Tree { tier, hp: tree_def(tier).hp };
+        objects[ix(x, y)] = Obj::Tree { tier, hp: tree_def(tier).hp };
     }
 
     let rocks = [
@@ -1110,7 +1261,7 @@ fn build_map() -> (i32, i32, Vec<Tile>, Vec<Obj>) {
         (8,46,4),(10,46,4),(12,46,4),(9,49,4),(11,49,4),(8,52,4),
     ];
     for (x, y, tier) in rocks {
-        objects[idx(x, y)] = Obj::Rock { tier, hp: rock_def(tier).hp };
+        objects[ix(x, y)] = Obj::Rock { tier, hp: rock_def(tier).hp };
     }
 
     let bushes = [
@@ -1123,7 +1274,7 @@ fn build_map() -> (i32, i32, Vec<Tile>, Vec<Obj>) {
         (58,53),(58,54),(59,51),(59,52),(59,53),(59,54),(60,52),(60,53),(60,55),(61,52),(61,54),(61,56),(62,53),(62,55),(62,57),
         (63,52),(63,53),(63,54),
     ];
-    for (x, y) in bushes { objects[idx(x, y)] = Obj::Bush { berries: 3, regrow: 0 }; }
+    for (x, y) in bushes { objects[ix(x, y)] = Obj::Bush { berries: 3, regrow: 0 }; }
 
     let boulders = [
         (27,12),(33,15),(8,18),(17,30),(26,28),
@@ -1132,8 +1283,9 @@ fn build_map() -> (i32, i32, Vec<Tile>, Vec<Obj>) {
         (55,8),(55,9),(55,10),(55,11),(55,13),(55,14),
         (54,57),(54,58),(54,59),(54,61),(54,62),(54,63),
     ];
-    for (x, y) in boulders { objects[idx(x, y)] = Obj::Boulder; }
-    objects[idx(20, 18)] = Obj::Trader;
+    for (x, y) in boulders { objects[ix(x, y)] = Obj::Boulder; }
+    objects[ix(20, 18)] = Obj::Trader;
+    objects[ix(20, 1)] = Obj::Angel;
     (w, h, tiles, objects)
 }
 
@@ -1190,7 +1342,8 @@ fn build_state_msg(g: &Game, pid: Pid) -> String {
         "t": "state", "tick": g.tick, "tick_ms": TICK_MS,
         "you": { "id": p.id, "x": p.x, "y": p.y, "hp": p.hp_cur, "skills": p.skills,
                  "inv": p.inv, "axe_tier": axe_tier, "pickaxe_tier": pickaxe_tier, "rod_tier": rod_tier,
-                 "intent": p.intent, "target": p.target, "trade_open": p.trade_open && near_trader(g, pid) },
+                 "intent": p.intent, "target": p.target, "trade_open": p.trade_open && near_trader(g, pid),
+                 "angel_modal_open": p.angel_modal_open && near_angel(g, pid) },
         "players": players, "mobs": mobs, "objects": g.objects, "log": p.log,
         "shop": shop_catalog(), "sells": sell_catalog(),
         "chat": chat,
@@ -1224,7 +1377,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
             p.inv = saved.inv;
             p
         } else {
-            Player::new(pid, uuid.clone(), requested_name, 20, 20, tx.clone())
+            Player::new(pid, uuid.clone(), requested_name, 20 + MAP_WEST_PAD, 20, tx.clone())
         };
         p.log.push("Welcome to Tradscape, /help for commands.".into());
         let init = json!({ "t": "init", "w": g.w, "h": g.h, "tiles": g.tiles, "you": pid, "uuid": uuid }).to_string();
@@ -1254,7 +1407,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                 }
                 "stop" => {
                     if let Some(p) = g.players.get_mut(&pid) {
-                        p.intent = Intent::None; p.target = None; p.trade_open = false;
+                        p.intent = Intent::None; p.target = None; p.trade_open = false; p.angel_modal_open = false;
                     }
                 }
                 "eat" => {
@@ -1273,6 +1426,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                     if let Some(p) = g.players.get_mut(&pid) {
                         p.trade_open = false;
                     }
+                }
+                "angel_confirm" => {
+                    angel_sacrifice(&mut g, pid);
+                }
+                "angel_decline" => {
+                    angel_decline(&mut g, pid);
                 }
                 "chat" => {
                     let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string();
