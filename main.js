@@ -62,6 +62,54 @@ function itemName(item) {
   return ITEM_NAME[item] || item.replaceAll('_', ' ');
 }
 
+/** Matches server `XP_CURVE_*` / `xp_threshold_for_level` / `level_from_xp` in main.rs. */
+const XP_CURVE_BASE = 50;
+const XP_CURVE_MULT = 1.17;
+const XP_MAX_LEVEL = 99;
+
+function xpThresholdForLevel(level) {
+  if (level <= 1) return 0;
+  const steps = level - 1;
+  const numer = Math.pow(XP_CURVE_MULT, steps) - 1;
+  const denom = XP_CURVE_MULT - 1;
+  return Math.floor((XP_CURVE_BASE * numer) / denom);
+}
+
+function levelFromXp(xp) {
+  const x = Math.max(0, xp | 0);
+  let lo = 1;
+  let hi = XP_MAX_LEVEL;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi + 1) / 2);
+    if (xpThresholdForLevel(mid) <= x) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+function xpToNextLevel(xp) {
+  const lvl = levelFromXp(xp);
+  if (lvl >= XP_MAX_LEVEL) return null;
+  const need = xpThresholdForLevel(lvl + 1);
+  return Math.max(0, need - (xp | 0));
+}
+
+function skillLevelTitle(xp) {
+  const n = xpToNextLevel(xp);
+  if (n === null) return 'Max level (99)';
+  return `Next level in ${n.toLocaleString()} XP`;
+}
+
+function appendSkillRow(container, label, level, xp) {
+  const row = document.createElement('div');
+  row.title = skillLevelTitle(xp);
+  const grey = document.createElement('span');
+  grey.style.color = '#aaa';
+  grey.textContent = ` (${xp} xp)`;
+  row.append(`${label}: ${level} `, grey);
+  container.appendChild(row);
+}
+
 function itemIcon(item) {
   return ITEM_IMG[item] || `items/${item}.png`;
 }
@@ -279,6 +327,8 @@ function render() {
     ctx.font = 'bold 11px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(p.name, vx * TILE + TILE / 2, vy * TILE - 2);
+    const speech = latestSpeechForPlayer(p);
+    if (speech) drawOverheadSpeech(speech, vx * TILE + TILE / 2, vy * TILE - 16);
     drawHpBar(vx * TILE, vy * TILE, p.hp / p.hp_max);
   }
 
@@ -476,6 +526,33 @@ function drawHpBar(px, py, frac) {
   ctx.fillRect(px + 4, py + 2, (TILE - 8) * Math.max(0, Math.min(1, frac)), 4);
 }
 
+function latestSpeechForPlayer(player) {
+  if (!state || !state.chat) return '';
+  const maxAgeTicks = Math.ceil(5000 / tickMs);
+  for (let i = state.chat.length - 1; i >= 0; i--) {
+    const msg = state.chat[i];
+    if (msg.name === 'System') continue;
+    const samePlayer = msg.pid === player.id || (!msg.pid && msg.name === player.name);
+    if (!samePlayer) continue;
+    if (state.tick - msg.tick > maxAgeTicks) return '';
+    return msg.text.length > 70 ? `${msg.text.slice(0, 67)}...` : msg.text;
+  }
+  return '';
+}
+
+function drawOverheadSpeech(text, x, y) {
+  ctx.save();
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#000';
+  ctx.fillStyle = '#ffff00';
+  ctx.strokeText(text, x, y);
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
 function rafLoop() {
   render();
   requestAnimationFrame(rafLoop);
@@ -488,6 +565,11 @@ canvas.addEventListener('click', (e) => {
   const [cx, cy] = camera();
   const mx = e.clientX - r.left;
   const my = e.clientY - r.top;
+  const clickedPlayer = playerAtScreenPoint(mx, my, cx, cy);
+  if (clickedPlayer) {
+    ws.send(JSON.stringify({ t: 'trade_player', pid: clickedPlayer.id }));
+    return;
+  }
   const clickedMob = mobAtScreenPoint(mx, my, cx, cy);
   if (clickedMob) {
     ws.send(JSON.stringify({ t: 'attack', mid: clickedMob.id }));
@@ -524,9 +606,28 @@ function mobAtScreenPoint(mx, my, cx, cy) {
   return null;
 }
 
+function playerAtScreenPoint(mx, my, cx, cy) {
+  for (let i = state.players.length - 1; i >= 0; i--) {
+    const p = state.players[i];
+    if (p.id === state.you.id) continue;
+    const [ex, ey] = entPos('p', p.id, p.x, p.y);
+    const px = (ex - cx) * TILE;
+    const py = (ey - cy) * TILE;
+    if (mx >= px && mx < px + TILE && my >= py && my < py + TILE) {
+      return p;
+    }
+  }
+  return null;
+}
+
 document.getElementById('trade-close').onclick = () => {
   document.getElementById('trade-window').classList.add('hidden');
   ws.send(JSON.stringify({ t: 'close_trade' }));
+};
+
+document.getElementById('player-trade-close').onclick = () => {
+  document.getElementById('player-trade-window').classList.add('hidden');
+  ws.send(JSON.stringify({ t: 'close_player_trade' }));
 };
 
 function closeAngelModal() {
@@ -578,35 +679,52 @@ function updatePanel(s) {
       }
       slot.title = `${itemName(it.item)} x${it.qty}`;
       slot.onclick = () => {
+        if (s.player_trade && s.player_trade.open) {
+          ws.send(JSON.stringify({ t: 'trade_offer_slot', slot: i }));
+          return;
+        }
         if (it.item !== 'berries' && it.item !== 'salmon') return;
         if (hpCur >= hpMax) return;
         ws.send(JSON.stringify({ t: 'eat', slot: i }));
       };
       slot.oncontextmenu = (e) => {
         e.preventDefault();
+        if (s.player_trade && s.player_trade.open) {
+          ws.send(JSON.stringify({ t: 'trade_offer_slot', slot: i }));
+          return;
+        }
         ws.send(JSON.stringify({ t: 'sell', slot: i }));
       };
+      if (s.player_trade && (s.player_trade.your_offer_slots || []).includes(i)) {
+        slot.classList.add('offered');
+      }
     }
     grid.appendChild(slot);
   }
   document.getElementById('eq-list').textContent = `axe T${s.you.axe_tier || 0}, pickaxe T${s.you.pickaxe_tier || 0}, rod T${s.you.rod_tier || 0}`;
   renderTrade(s);
+  renderPlayerTrade(s);
   renderAngelModal(s);
   renderChat(s.chat || []);
 
+  const pct = hpMax > 0 ? Math.min(100, Math.round((100 * hpCur) / hpMax)) : 0;
+  document.getElementById('hp-bar-fill').style.width = `${pct}%`;
+  document.getElementById('vital-hp-numbers').textContent = `${hpCur} / ${hpMax}`;
+
   const ap = sk.angel_points ?? 0;
-  document.getElementById('skills-list').innerHTML = `
-    <div>Angel points: ${ap} <span style="color:#aaa">(+${ap}% XP rate)</span></div>
-    <hr style="margin:8px 0;border-color:#444">
-    <div>Woodcutting: ${sk.woodcutting} <span style="color:#aaa">(${sk.woodcutting_xp} xp)</span></div>
-    <div>Mining: ${sk.mining} <span style="color:#aaa">(${sk.mining_xp} xp)</span></div>
-    <div>Fishing: ${sk.fishing ?? 1} <span style="color:#aaa">(${sk.fishing_xp ?? 0} xp)</span></div>
-    <div>Attack: ${sk.attack} <span style="color:#aaa">(${sk.attack_xp} xp)</span></div>
-    <div>Strength: ${sk.strength} <span style="color:#aaa">(${sk.strength_xp} xp)</span></div>
-    <div>Defence: ${sk.defence} <span style="color:#aaa">(${sk.defence_xp} xp)</span></div>
-    <div>HP: ${sk.hp} <span style="color:#aaa">(${sk.hp_xp} xp)</span></div>`;
-  document.getElementById('hp-cur').textContent = s.you.hp;
-  document.getElementById('hp-max').textContent = sk.hp;
+  document.getElementById('vital-angel-text').textContent = `Angel points: ${ap}`;
+  const bonusEl = document.getElementById('vital-angel-bonus');
+  bonusEl.textContent = ap > 0 ? `(+${ap}% XP)` : '';
+
+  const skillsEl = document.getElementById('skills-list');
+  skillsEl.replaceChildren();
+  appendSkillRow(skillsEl, 'Woodcutting', sk.woodcutting, sk.woodcutting_xp);
+  appendSkillRow(skillsEl, 'Mining', sk.mining, sk.mining_xp);
+  appendSkillRow(skillsEl, 'Fishing', sk.fishing ?? 1, sk.fishing_xp ?? 0);
+  appendSkillRow(skillsEl, 'Attack', sk.attack, sk.attack_xp);
+  appendSkillRow(skillsEl, 'Strength', sk.strength, sk.strength_xp);
+  appendSkillRow(skillsEl, 'Defence', sk.defence, sk.defence_xp);
+  appendSkillRow(skillsEl, 'HP', sk.hp, sk.hp_xp);
 }
 
 function renderAngelModal(s) {
@@ -654,6 +772,60 @@ function renderTrade(s) {
     empty.className = 'hint';
     empty.textContent = 'Your inventory is empty.';
     sellList.appendChild(empty);
+  }
+}
+
+function renderPlayerTrade(s) {
+  const win = document.getElementById('player-trade-window');
+  if (!win) return;
+  const trade = s.player_trade;
+  win.classList.toggle('hidden', !trade || !trade.open);
+  if (!trade || !trade.open) return;
+
+  document.getElementById('player-trade-title').textContent = `Trading with ${trade.partner_name}`;
+  const confirming = trade.stage === 'confirm';
+  document.getElementById('player-trade-stage').textContent = confirming
+    ? 'Second trade screen: confirm the final exchange.'
+    : 'First trade screen: choose items, then accept.';
+
+  renderTradeOfferList(document.getElementById('player-trade-your-offer'), trade.your_offer);
+  renderTradeOfferList(document.getElementById('player-trade-their-offer'), trade.their_offer);
+
+  const status = document.getElementById('player-trade-status');
+  if (confirming) {
+    status.textContent = `Confirm status: you ${trade.your_confirmed ? 'confirmed' : 'need to confirm'}, ${trade.partner_name} ${trade.their_confirmed ? 'confirmed' : 'needs to confirm'}.`;
+  } else {
+    status.textContent = `Accept status: you ${trade.your_accepted ? 'accepted' : 'need to accept'}, ${trade.partner_name} ${trade.their_accepted ? 'accepted' : 'needs to accept'}.`;
+  }
+
+  const accept = document.getElementById('player-trade-accept');
+  accept.textContent = confirming ? 'Confirm' : 'Accept';
+  accept.disabled = confirming ? trade.your_confirmed : trade.your_accepted;
+  accept.onclick = () => ws.send(JSON.stringify({ t: confirming ? 'trade_confirm' : 'trade_accept' }));
+}
+
+function renderTradeOfferList(el, items) {
+  el.replaceChildren();
+  if (!items || items.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'hint';
+    empty.textContent = 'Absolutely nothing!';
+    el.appendChild(empty);
+    return;
+  }
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = 'player-trade-row';
+    const im = document.createElement('img');
+    im.src = `assets/${itemIcon(it.item)}`;
+    im.onerror = () => { im.style.display = 'none'; };
+    const name = document.createElement('span');
+    name.textContent = itemName(it.item);
+    const qty = document.createElement('span');
+    qty.className = 'trade-price';
+    qty.textContent = `x${it.qty}`;
+    row.append(im, name, qty);
+    el.appendChild(row);
   }
 }
 

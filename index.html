@@ -9,6 +9,20 @@
 <div id="game">
   <canvas id="world" width="720" height="720"></canvas>
   <div id="panel">
+    <div id="player-vitals">
+      <div class="vital-hp-block">
+        <div class="vital-hp-heading">❤️ Health</div>
+        <div class="hp-bar-track" aria-hidden="true">
+          <div id="hp-bar-fill" class="hp-bar-fill"></div>
+        </div>
+        <div id="vital-hp-numbers" class="vital-hp-numbers">10 / 10</div>
+      </div>
+      <div id="vital-angel-row" class="vital-angel-row">
+        <span class="vital-angel-emoji" aria-hidden="true">👼</span>
+        <span id="vital-angel-text">Angel points: 0</span>
+        <span id="vital-angel-bonus" class="vital-angel-bonus"></span>
+      </div>
+    </div>
     <div id="tabs">
       <button data-tab="inv" class="active">Inv</button>
       <button data-tab="skills">Skills</button>
@@ -20,8 +34,6 @@
     </div>
     <div id="tab-skills" class="tab-content hidden">
       <div id="skills-list"></div>
-      <hr>
-      <div>HP: <span id="hp-cur">10</span>/<span id="hp-max">10</span></div>
     </div>
   </div>
 </div>
@@ -42,6 +54,30 @@
       </section>
     </div>
     <div class="hint">Click a merchant item to buy it. Click one of your items to sell it for its listed value.</div>
+  </div>
+</div>
+<div id="player-trade-window" class="window hidden">
+  <div class="window-card player-trade-card">
+    <div class="window-title">
+      <span id="player-trade-title">Trading</span>
+      <button id="player-trade-close" type="button">X</button>
+    </div>
+    <div id="player-trade-stage" class="trade-stage"></div>
+    <div class="trade-columns">
+      <section>
+        <h3>Your Offer</h3>
+        <div id="player-trade-your-offer" class="player-trade-list"></div>
+      </section>
+      <section>
+        <h3>Their Offer</h3>
+        <div id="player-trade-their-offer" class="player-trade-list"></div>
+      </section>
+    </div>
+    <div id="player-trade-status" class="trade-status"></div>
+    <div class="player-trade-actions">
+      <button id="player-trade-accept" type="button" class="angel-btn">Accept</button>
+    </div>
+    <div class="hint">Click inventory items to add or remove them from your offer. Both players accept, then both confirm.</div>
   </div>
 </div>
 <div id="angel-window" class="window hidden">

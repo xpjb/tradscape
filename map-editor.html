@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tradscape Map Editor</title>
+<style>
+:root { color-scheme: dark; --bg: #111; --panel: #1b1b1b; --line: #333; --text: #eee; --muted: #aaa; --accent: #ffe066; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+#app { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
+#sidebar { overflow: auto; padding: 14px; background: var(--panel); border-right: 1px solid var(--line); }
+#stage { min-width: 0; min-height: 0; position: relative; }
+#map { width: 100%; height: 100%; display: block; background: #050505; cursor: crosshair; }
+h1 { font-size: 18px; margin: 0 0 12px; }
+h2 { font-size: 13px; margin: 18px 0 8px; text-transform: uppercase; color: var(--muted); letter-spacing: .08em; }
+label { display: block; margin: 8px 0 4px; color: var(--muted); }
+button, select, input { width: 100%; border: 1px solid #444; border-radius: 5px; background: #252525; color: var(--text); padding: 7px 8px; }
+button { cursor: pointer; }
+button:hover { border-color: #666; background: #2c2c2c; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.drop { border: 1px dashed #666; border-radius: 8px; padding: 12px; text-align: center; color: var(--muted); background: #151515; }
+.drop.drag { border-color: var(--accent); color: var(--accent); }
+.tool-section { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-top: 10px; }
+.tool-section.active-section { border-color: var(--accent); background: #201d12; }
+.tool-section h2 { margin-top: 0; }
+.palette { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.palette button { min-height: 46px; display: grid; place-items: center; padding: 6px; }
+.palette button.active, .action-button.active { border-color: var(--accent); color: var(--accent); }
+.palette-icon { width: 32px; height: 32px; object-fit: contain; image-rendering: pixelated; }
+.palette-fallback { width: 32px; height: 32px; border-radius: 4px; display: grid; place-items: center; color: #050505; font-weight: 700; font-size: 12px; }
+.status { white-space: pre-wrap; min-height: 54px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: #101010; color: var(--muted); }
+.good { color: #8bdc88; }
+.bad { color: #ff8b8b; }
+.hint { color: var(--muted); font-size: 12px; }
+#coords { position: absolute; left: 10px; bottom: 10px; padding: 5px 8px; border-radius: 5px; background: rgba(0,0,0,.7); color: #ddd; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <h1>Tradscape Map Editor</h1>
+    <div id="drop" class="drop">Drop map.json here<br><span class="hint">or pick a file below</span></div>
+    <div class="row">
+      <button id="open-file" type="button">Open JSON</button>
+      <button id="load-default" type="button">Load ./map.json</button>
+    </div>
+    <input id="file-input" type="file" accept="application/json,.json" hidden>
+
+    <h2>Action</h2>
+    <div class="row">
+      <button id="select-tool" class="action-button active" type="button">Select / move</button>
+      <button id="erase-tool" class="action-button" type="button">Erase</button>
+    </div>
+
+    <section id="terrain-section" class="tool-section">
+      <h2>Terrain</h2>
+      <div id="tile-palette" class="palette"></div>
+    </section>
+
+    <section id="entity-section" class="tool-section">
+      <h2>Entities</h2>
+      <div id="entity-palette" class="palette"></div>
+    </section>
+
+    <section id="enemy-section" class="tool-section">
+      <h2>Enemies</h2>
+      <div id="enemy-palette" class="palette"></div>
+      <label>Global enemy stats for all enemies</label>
+      <div class="row">
+        <div><label for="mob-hp">HP</label><input id="mob-hp" type="number" min="1" value="7"></div>
+        <div><label for="mob-attack">Attack</label><input id="mob-attack" type="number" min="0" value="2"></div>
+      </div>
+      <div class="row">
+        <div><label for="mob-strength">Strength</label><input id="mob-strength" type="number" min="0" value="2"></div>
+        <div><label for="mob-defence">Defence</label><input id="mob-defence" type="number" min="0" value="1"></div>
+      </div>
+    </section>
+
+    <h2>Map</h2>
+    <div class="row">
+      <div><label for="map-w">Width</label><input id="map-w" type="number" min="1"></div>
+      <div><label for="map-h">Height</label><input id="map-h" type="number" min="1"></div>
+    </div>
+    <button id="resize" type="button">Resize, preserving top-left</button>
+
+    <h2>Export</h2>
+    <div class="row">
+      <button id="validate" type="button">Validate</button>
+      <button id="download" type="button">Download map.json</button>
+    </div>
+    <div id="status" class="status"></div>
+    <p class="hint">Tiles paint directly. Entities, enemies, and spawn share select/place/move: click an existing item to select it, drag to move it, or click empty space to place the active palette item. Delete removes selected entities/enemies.</p>
+  </aside>
+  <main id="stage">
+    <canvas id="map"></canvas>
+    <div id="coords">No map loaded</div>
+  </main>
+</div>
+
+<script>
+const TILE_KINDS = ['grass', 'dirt', 'sand', 'water', 'stone', 'path'];
+const OBJECT_KINDS = ['none', 'tree', 'rock', 'bush', 'boulder', 'trader', 'angel'];
+const MOB_KINDS = ['goblin', 'club_goblin', 'ninja', 'dragon'];
+const TILE_COLOR = { grass: '#3a7d2c', dirt: '#7a5a3b', sand: '#d9c787', water: '#2a5fb0', stone: '#888', path: '#a99a82' };
+const OBJ_COLOR  = { tree: '#1f5417', rock: '#666', bush: '#7a3', boulder: '#777', trader: '#c0a060', angel: '#e8e8ff' };
+const MOB_COLOR  = { goblin: '#7caa3c', club_goblin: '#6b8f2a', ninja: '#2b2b35', dragon: '#8b2222' };
+const TILE_IMG = { grass: 'tiles/grass.png', dirt: 'tiles/dirt.png', sand: 'tiles/sand.png', water: 'tiles/water.png', stone: 'tiles/stone.png', path: 'tiles/path.png' };
+const OBJ_IMG = {
+  tree_tier_1: 'entities/tree_pine.png', tree_tier_2: 'entities/tree_oak.png', tree_tier_3: 'entities/tree_yew.png', tree_tier_4: 'entities/tree_magic.png',
+  rock_tier_1: 'entities/rock_copper.png', rock_tier_2: 'entities/rock_iron.png', rock_tier_3: 'entities/rock_gold.png', rock_tier_4: 'entities/rock_cobalt.png',
+  bush: 'entities/berry_bush.png', boulder: 'entities/boulder.png', trader: 'entities/trader.png', angel: 'entities/angel.png',
+};
+const MOB_IMG = { goblin: 'entities/goblin.png', club_goblin: 'entities/club_goblin.png', ninja: 'entities/ninja.png', dragon: 'entities/dragon.png' };
+const MOB_PRESETS = {
+  goblin: { hp: 7, attack: 2, strength: 2, defence: 1 },
+  club_goblin: { hp: 24, attack: 8, strength: 9, defence: 6 },
+  ninja: { hp: 42, attack: 16, strength: 17, defence: 14 },
+  dragon: { hp: 105, attack: 40, strength: 43, defence: 35 },
+};
+const ENTITY_BRUSHES = [
+  { label: 'Player spawn', object: null, spawn: true, color: '#ffe066' },
+  { label: 'Pine tree', object: { kind: 'tree', tier: 1 }, color: OBJ_COLOR.tree },
+  { label: 'Oak tree', object: { kind: 'tree', tier: 2 }, color: OBJ_COLOR.tree },
+  { label: 'Yew tree', object: { kind: 'tree', tier: 3 }, color: OBJ_COLOR.tree },
+  { label: 'Magic tree', object: { kind: 'tree', tier: 4 }, color: OBJ_COLOR.tree },
+  { label: 'Copper rock', object: { kind: 'rock', tier: 1 }, color: OBJ_COLOR.rock },
+  { label: 'Iron rock', object: { kind: 'rock', tier: 2 }, color: OBJ_COLOR.rock },
+  { label: 'Gold rock', object: { kind: 'rock', tier: 3 }, color: OBJ_COLOR.rock },
+  { label: 'Cobalt rock', object: { kind: 'rock', tier: 4 }, color: OBJ_COLOR.rock },
+  { label: 'Bush', object: { kind: 'bush' }, color: OBJ_COLOR.bush },
+  { label: 'Boulder', object: { kind: 'boulder' }, color: OBJ_COLOR.boulder },
+  { label: 'Trader', object: { kind: 'trader' }, color: OBJ_COLOR.trader },
+  { label: 'Angel', object: { kind: 'angel' }, color: OBJ_COLOR.angel },
+];
+const MOB_LABEL = { goblin: 'Goblin', club_goblin: 'Club goblin', ninja: 'Ninja', dragon: 'Dragon' };
+
+let map = null;
+let activeTool = { type: 'select' };
+let selected = null;
+let scale = 16;
+let panX = 30;
+let panY = 30;
+let painting = false;
+let panning = false;
+let draggingSelection = false;
+let lastMouse = [0, 0];
+const images = new Map();
+
+const canvas = document.getElementById('map');
+const ctx = canvas.getContext('2d');
+const coords = document.getElementById('coords');
+const statusBox = document.getElementById('status');
+
+function loadImage(path) {
+  if (!path) return null;
+  const src = 'assets/' + path;
+  if (!images.has(src)) {
+    const img = new Image();
+    img.src = src;
+    img.onerror = () => img.failed = true;
+    images.set(src, img);
+  }
+  return images.get(src);
+}
+
+function setStatus(text, ok = true) {
+  statusBox.className = 'status ' + (ok ? 'good' : 'bad');
+  statusBox.textContent = text;
+}
+
+function normalizeMap(raw) {
+  const w = raw.w | 0;
+  const h = raw.h | 0;
+  const count = w * h;
+  const tiles = Array.isArray(raw.tiles) ? raw.tiles.slice(0, count) : [];
+  const objects = Array.isArray(raw.objects) ? raw.objects.slice(0, count) : [];
+  while (tiles.length < count) tiles.push('grass');
+  while (objects.length < count) objects.push({ kind: 'none' });
+  return {
+    version: 1,
+    w,
+    h,
+    player_spawn: Array.isArray(raw.player_spawn) ? [raw.player_spawn[0] | 0, raw.player_spawn[1] | 0] : [0, 0],
+    tiles: tiles.map(t => TILE_KINDS.includes(t) ? t : 'grass'),
+    objects: objects.map(normalizeObject),
+    mobs: Array.isArray(raw.mobs) ? raw.mobs.map(normalizeMob).filter(Boolean) : [],
+  };
+}
+
+function normalizeObject(o) {
+  const kind = o && OBJECT_KINDS.includes(o.kind) ? o.kind : 'none';
+  if (kind === 'tree' || kind === 'rock') return { kind, tier: clampInt(o.tier, 1, 4, 1) };
+  return { kind };
+}
+
+function normalizeMob(m) {
+  if (!m || !MOB_KINDS.includes(m.kind)) return null;
+  const preset = MOB_PRESETS[m.kind];
+  return {
+    kind: m.kind,
+    x: m.x | 0,
+    y: m.y | 0,
+    hp: clampInt(m.hp, 1, 9999, preset.hp),
+    attack: clampInt(m.attack, 0, 9999, preset.attack),
+    strength: clampInt(m.strength, 0, 9999, preset.strength),
+    defence: clampInt(m.defence, 0, 9999, preset.defence),
+  };
+}
+
+function clampInt(value, min, max, fallback) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function idx(x, y) { return y * map.w + x; }
+function inBounds(x, y) { return map && x >= 0 && y >= 0 && x < map.w && y < map.h; }
+function cellFromMouse(e) {
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - rect.left - panX) / scale);
+  const y = Math.floor((e.clientY - rect.top - panY) / scale);
+  return [x, y, e.clientX - rect.left, e.clientY - rect.top];
+}
+
+function draw() {
+  fitCanvas();
+  ctx.fillStyle = '#050505';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!map) {
+    requestAnimationFrame(draw);
+    return;
+  }
+
+  const x0 = Math.max(0, Math.floor(-panX / scale) - 1);
+  const y0 = Math.max(0, Math.floor(-panY / scale) - 1);
+  const x1 = Math.min(map.w, Math.ceil((canvas.width - panX) / scale) + 1);
+  const y1 = Math.min(map.h, Math.ceil((canvas.height - panY) / scale) + 1);
+
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const px = panX + x * scale;
+      const py = panY + y * scale;
+      const tile = map.tiles[idx(x, y)];
+      drawCell(TILE_IMG[tile], TILE_COLOR[tile] || '#444', tile[0], px, py);
+      const obj = map.objects[idx(x, y)];
+      if (obj.kind !== 'none') drawObject(obj, px, py);
+      ctx.strokeStyle = 'rgba(0,0,0,.22)';
+      ctx.strokeRect(px, py, scale, scale);
+    }
+  }
+
+  for (const mob of map.mobs) {
+    if (mob.x < x0 || mob.y < y0 || mob.x >= x1 || mob.y >= y1) continue;
+    const px = panX + mob.x * scale;
+    const py = panY + mob.y * scale;
+    drawCell(MOB_IMG[mob.kind], MOB_COLOR[mob.kind] || '#a33', mob.kind[0].toUpperCase(), px, py);
+    ctx.strokeStyle = '#ff6961';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px + 1, py + 1, scale - 2, scale - 2);
+    ctx.lineWidth = 1;
+  }
+
+  const [sx, sy] = map.player_spawn;
+  if (inBounds(sx, sy)) {
+    const px = panX + sx * scale;
+    const py = panY + sy * scale;
+    ctx.strokeStyle = '#ffe066';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(px + 2, py + 2, scale - 4, scale - 4);
+    ctx.lineWidth = 1;
+  }
+  drawSelection();
+  requestAnimationFrame(draw);
+}
+
+function drawSelection() {
+  const cell = selectedCell();
+  if (!cell || !inBounds(cell.x, cell.y)) return;
+  const px = panX + cell.x * scale;
+  const py = panY + cell.y * scale;
+  ctx.save();
+  ctx.strokeStyle = '#66e3ff';
+  ctx.lineWidth = 3;
+  ctx.setLineDash([5, 4]);
+  ctx.strokeRect(px + 3, py + 3, scale - 6, scale - 6);
+  ctx.restore();
+}
+
+function drawCell(path, fallback, label, px, py) {
+  const im = loadImage(path);
+  if (im && im.complete && im.naturalWidth > 0 && !im.failed) {
+    ctx.drawImage(im, px, py, scale, scale);
+    return;
+  }
+  ctx.fillStyle = fallback;
+  ctx.fillRect(px, py, scale, scale);
+  if (scale >= 12 && label) {
+    ctx.fillStyle = '#000';
+    ctx.font = `${Math.max(8, Math.floor(scale * .35))}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, px + scale / 2, py + scale / 2);
+  }
+}
+
+function drawObject(obj, px, py) {
+  let key = obj.kind;
+  if (obj.kind === 'tree' || obj.kind === 'rock') key = `${obj.kind}_tier_${obj.tier || 1}`;
+  drawCell(OBJ_IMG[key], OBJ_COLOR[obj.kind] || '#888', obj.kind[0].toUpperCase(), px, py);
+}
+
+function fitCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(1, Math.floor(rect.width));
+  const h = Math.max(1, Math.floor(rect.height));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+
+function applyToolAt(x, y, options = {}) {
+  if (!inBounds(x, y)) return;
+  const selectExisting = options.selectExisting !== false;
+  if (activeTool.type === 'select') {
+    selectAt(x, y);
+  } else if (activeTool.type === 'tile') {
+    map.tiles[idx(x, y)] = activeTool.kind;
+    selected = { type: 'tile', x, y };
+  } else if (activeTool.type === 'object') {
+    if (selectExisting && selectMovableAt(x, y)) return;
+    map.objects[idx(x, y)] = cloneObject(activeTool.object);
+    selected = { type: 'object', x, y };
+  } else if (activeTool.type === 'mob') {
+    if (selectExisting && selectMovableAt(x, y)) return;
+    removeMobAt(x, y);
+    const mob = currentMobBrush(x, y);
+    map.mobs.push(mob);
+    selected = { type: 'mob', mob };
+  } else if (activeTool.type === 'spawn') {
+    if (selectExisting && map.player_spawn[0] === x && map.player_spawn[1] === y) {
+      selected = { type: 'spawn' };
+      draggingSelection = true;
+      return;
+    }
+    map.player_spawn = [x, y];
+    selected = { type: 'spawn' };
+    draggingSelection = true;
+  } else if (activeTool.type === 'erase') {
+    map.objects[idx(x, y)] = { kind: 'none' };
+    removeMobAt(x, y);
+    selected = null;
+  }
+}
+
+function selectMovableAt(x, y) {
+  const mob = mobAt(x, y);
+  if (mob) {
+    selected = { type: 'mob', mob };
+    draggingSelection = true;
+    return true;
+  }
+  const object = map.objects[idx(x, y)];
+  if (object.kind !== 'none') {
+    selected = { type: 'object', x, y };
+    draggingSelection = true;
+    return true;
+  }
+  if (map.player_spawn[0] === x && map.player_spawn[1] === y) {
+    selected = { type: 'spawn' };
+    draggingSelection = true;
+    return true;
+  }
+  return false;
+}
+
+function selectAt(x, y) {
+  const mob = mobAt(x, y);
+  if (mob) {
+    selected = { type: 'mob', mob };
+    draggingSelection = true;
+    return;
+  }
+  const object = map.objects[idx(x, y)];
+  if (object.kind !== 'none') {
+    selected = { type: 'object', x, y };
+    draggingSelection = true;
+    return;
+  }
+  if (map.player_spawn[0] === x && map.player_spawn[1] === y) {
+    selected = { type: 'spawn' };
+    draggingSelection = true;
+    return;
+  }
+  selected = { type: 'tile', x, y };
+}
+
+function selectedCell() {
+  if (!selected) return null;
+  if (selected.type === 'mob') return { x: selected.mob.x, y: selected.mob.y };
+  if (selected.type === 'spawn') return { x: map.player_spawn[0], y: map.player_spawn[1] };
+  return { x: selected.x, y: selected.y };
+}
+
+function deleteSelection() {
+  if (!map || !selected) return;
+  if (selected.type === 'mob') {
+    map.mobs = map.mobs.filter(m => m !== selected.mob);
+  } else if (selected.type === 'object') {
+    map.objects[idx(selected.x, selected.y)] = { kind: 'none' };
+  }
+  selected = null;
+}
+
+function cloneObject(object) {
+  return { ...object };
+}
+
+function moveSelectionTo(x, y) {
+  if (!selected || !inBounds(x, y)) return;
+  if (selected.type === 'mob') {
+    selected.mob.x = x;
+    selected.mob.y = y;
+  } else if (selected.type === 'object') {
+    if (selected.x === x && selected.y === y) return;
+    const object = map.objects[idx(selected.x, selected.y)];
+    map.objects[idx(selected.x, selected.y)] = { kind: 'none' };
+    map.objects[idx(x, y)] = object;
+    selected.x = x;
+    selected.y = y;
+  } else if (selected.type === 'spawn') {
+    map.player_spawn = [x, y];
+  }
+}
+
+function currentMobBrush(x, y) {
+  const kind = activeTool.kind || 'goblin';
+  const stats = globalMobStats();
+  return {
+    kind,
+    x,
+    y,
+    hp: stats.hp,
+    attack: stats.attack,
+    strength: stats.strength,
+    defence: stats.defence,
+  };
+}
+
+function removeMobAt(x, y) {
+  map.mobs = map.mobs.filter(m => m.x !== x || m.y !== y);
+}
+
+function mobAt(x, y) {
+  for (let i = map.mobs.length - 1; i >= 0; i--) {
+    const mob = map.mobs[i];
+    if (mob.x === x && mob.y === y) return mob;
+  }
+  return null;
+}
+
+function validateMap() {
+  if (!map) return ['No map loaded.'];
+  const errors = [];
+  const count = map.w * map.h;
+  if (map.w <= 0 || map.h <= 0) errors.push('Dimensions must be positive.');
+  if (map.tiles.length !== count) errors.push(`tiles length is ${map.tiles.length}, expected ${count}.`);
+  if (map.objects.length !== count) errors.push(`objects length is ${map.objects.length}, expected ${count}.`);
+  map.tiles.forEach((tile, i) => { if (!TILE_KINDS.includes(tile)) errors.push(`Unknown tile "${tile}" at cell ${i}.`); });
+  map.objects.forEach((obj, i) => {
+    if (!obj || !OBJECT_KINDS.includes(obj.kind)) errors.push(`Unknown object at cell ${i}.`);
+    if ((obj.kind === 'tree' || obj.kind === 'rock') && ![1, 2, 3, 4].includes(obj.tier)) errors.push(`${obj.kind} at cell ${i} needs tier 1-4.`);
+  });
+  validateOpenCell(map.player_spawn[0], map.player_spawn[1], 'player_spawn', errors);
+  map.mobs.forEach((mob, i) => {
+    if (!MOB_KINDS.includes(mob.kind)) errors.push(`Unknown mob kind at mobs[${i}].`);
+    if (mob.hp <= 0 || mob.attack < 0 || mob.strength < 0 || mob.defence < 0) errors.push(`Invalid stats at mobs[${i}].`);
+    validateOpenCell(mob.x, mob.y, `mobs[${i}]`, errors);
+  });
+  return errors;
+}
+
+function validateOpenCell(x, y, label, errors) {
+  if (!inBounds(x, y)) {
+    errors.push(`${label} out of bounds at ${x},${y}.`);
+    return;
+  }
+  if (map.tiles[idx(x, y)] === 'water') errors.push(`${label} is on water at ${x},${y}.`);
+  if (map.objects[idx(x, y)].kind !== 'none') errors.push(`${label} is blocked by object at ${x},${y}.`);
+}
+
+function exportJson() {
+  const clean = normalizeMap(map);
+  return JSON.stringify(clean, null, 2) + '\n';
+}
+
+async function loadText(text, label) {
+  try {
+    map = normalizeMap(JSON.parse(text));
+    document.getElementById('map-w').value = map.w;
+    document.getElementById('map-h').value = map.h;
+    panX = 30;
+    panY = 30;
+    selected = null;
+    setStatus(`Loaded ${label}: ${map.w}x${map.h}, ${map.mobs.length} mobs.`);
+  } catch (err) {
+    setStatus(`Could not load JSON: ${err.message}`, false);
+  }
+}
+
+function resizeMap() {
+  if (!map) return;
+  const nw = clampInt(document.getElementById('map-w').value, 1, 500, map.w);
+  const nh = clampInt(document.getElementById('map-h').value, 1, 500, map.h);
+  const old = map;
+  const tiles = Array(nw * nh).fill('grass');
+  const objects = Array.from({ length: nw * nh }, () => ({ kind: 'none' }));
+  for (let y = 0; y < Math.min(old.h, nh); y++) {
+    for (let x = 0; x < Math.min(old.w, nw); x++) {
+      tiles[y * nw + x] = old.tiles[y * old.w + x];
+      objects[y * nw + x] = old.objects[y * old.w + x];
+    }
+  }
+  map = { ...old, w: nw, h: nh, tiles, objects, mobs: old.mobs.filter(m => m.x < nw && m.y < nh) };
+  map.player_spawn = [Math.min(map.player_spawn[0], nw - 1), Math.min(map.player_spawn[1], nh - 1)];
+  selected = null;
+  setStatus(`Resized to ${nw}x${nh}.`);
+}
+
+document.getElementById('open-file').onclick = () => document.getElementById('file-input').click();
+document.getElementById('file-input').onchange = async e => {
+  const file = e.target.files[0];
+  if (file) loadText(await file.text(), file.name);
+};
+document.getElementById('load-default').onclick = async () => {
+  if (location.protocol === 'file:') {
+    setStatus('Browsers block loading ./map.json from file:// pages. Pick or drag/drop map.json instead.', false);
+    document.getElementById('file-input').click();
+    return;
+  }
+  try {
+    const res = await fetch('map.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    loadText(await res.text(), './map.json');
+  } catch (err) {
+    setStatus(`Could not fetch ./map.json. Drag/drop or open the file instead. ${err.message}`, false);
+  }
+};
+document.getElementById('resize').onclick = resizeMap;
+document.getElementById('validate').onclick = () => {
+  const errors = validateMap();
+  setStatus(errors.length ? errors.slice(0, 12).join('\n') : 'Map is valid.', errors.length === 0);
+};
+document.getElementById('download').onclick = () => {
+  const errors = validateMap();
+  if (errors.length) {
+    setStatus(errors.slice(0, 12).join('\n'), false);
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([exportJson()], { type: 'application/json' }));
+  a.download = 'map.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  setStatus('Downloaded map.json.');
+};
+
+const drop = document.getElementById('drop');
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('drag'); };
+drop.ondragleave = () => drop.classList.remove('drag');
+drop.ondrop = async e => {
+  e.preventDefault();
+  drop.classList.remove('drag');
+  const file = e.dataTransfer.files[0];
+  if (file) loadText(await file.text(), file.name);
+};
+
+document.getElementById('select-tool').onclick = () => setActiveTool({ type: 'select' });
+document.getElementById('erase-tool').onclick = () => setActiveTool({ type: 'erase' });
+
+function addPaletteButton(container, label, color, tool, artPath, onSelect) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  const fallbackLabel = label.slice(0, 1).toUpperCase();
+  button.innerHTML = artPath
+    ? `<img class="palette-icon" src="assets/${artPath}" alt="" onerror="this.replaceWith(fallbackPaletteIcon('${color}', '${fallbackLabel}'))">`
+    : `<span class="palette-fallback" style="background:${color}">${fallbackLabel}</span>`;
+  button.onclick = () => {
+    setActiveTool(tool);
+    if (onSelect) onSelect();
+  };
+  container.appendChild(button);
+  return button;
+}
+
+function fallbackPaletteIcon(color, label) {
+  const span = document.createElement('span');
+  span.className = 'palette-fallback';
+  span.style.background = color;
+  span.textContent = label;
+  return span;
+}
+
+for (const kind of TILE_KINDS) {
+  addPaletteButton(
+    document.getElementById('tile-palette'),
+    kind,
+    TILE_COLOR[kind],
+    { type: 'tile', kind, section: 'terrain' },
+    TILE_IMG[kind],
+  );
+}
+
+for (const brush of ENTITY_BRUSHES) {
+  addPaletteButton(
+    document.getElementById('entity-palette'),
+    brush.label,
+    brush.color,
+    brush.spawn ? { type: 'spawn', section: 'entity' } : { type: 'object', object: brush.object, section: 'entity' },
+    brush.spawn ? 'entities/player.png' : objectArtPath(brush.object),
+  );
+}
+
+for (const kind of MOB_KINDS) {
+  addPaletteButton(
+    document.getElementById('enemy-palette'),
+    MOB_LABEL[kind],
+    MOB_COLOR[kind],
+    { type: 'mob', kind, section: 'enemy' },
+    MOB_IMG[kind],
+    () => setMobStats(MOB_PRESETS[kind]),
+  );
+}
+
+for (const id of ['mob-hp', 'mob-attack', 'mob-strength', 'mob-defence']) {
+  document.getElementById(id).addEventListener('change', applyGlobalMobStats);
+  document.getElementById(id).addEventListener('input', applyGlobalMobStats);
+}
+
+function objectArtPath(object) {
+  if (!object) return '';
+  if (object.kind === 'tree' || object.kind === 'rock') return OBJ_IMG[`${object.kind}_tier_${object.tier || 1}`];
+  return OBJ_IMG[object.kind] || '';
+}
+
+function setMobStats(stats) {
+  document.getElementById('mob-hp').value = stats.hp;
+  document.getElementById('mob-attack').value = stats.attack;
+  document.getElementById('mob-strength').value = stats.strength;
+  document.getElementById('mob-defence').value = stats.defence;
+  applyGlobalMobStats();
+}
+
+function globalMobStats() {
+  return {
+    hp: clampInt(document.getElementById('mob-hp').value, 1, 9999, 7),
+    attack: clampInt(document.getElementById('mob-attack').value, 0, 9999, 2),
+    strength: clampInt(document.getElementById('mob-strength').value, 0, 9999, 2),
+    defence: clampInt(document.getElementById('mob-defence').value, 0, 9999, 1),
+  };
+}
+
+function applyGlobalMobStats() {
+  if (!map) return;
+  const stats = globalMobStats();
+  for (const mob of map.mobs) {
+    mob.hp = stats.hp;
+    mob.attack = stats.attack;
+    mob.strength = stats.strength;
+    mob.defence = stats.defence;
+  }
+}
+
+function setActiveTool(tool) {
+  activeTool = tool;
+  if (tool.type !== 'select') selected = null;
+  document.querySelectorAll('.palette button, .action-button').forEach(button => button.classList.remove('active'));
+  document.querySelectorAll('.tool-section').forEach(section => section.classList.remove('active-section'));
+  if (tool.type === 'select') {
+    document.getElementById('select-tool').classList.add('active');
+    return;
+  }
+  if (tool.type === 'erase') {
+    document.getElementById('erase-tool').classList.add('active');
+    return;
+  }
+  const sectionId = tool.section === 'enemy' ? 'enemy-section' : tool.section === 'entity' ? 'entity-section' : 'terrain-section';
+  document.getElementById(sectionId).classList.add('active-section');
+  const paletteId = tool.section === 'enemy' ? 'enemy-palette' : tool.section === 'entity' ? 'entity-palette' : 'tile-palette';
+  for (const button of document.getElementById(paletteId).children) {
+    const matchingTile = tool.type === 'tile' && button.textContent === tool.kind;
+    const matchingEnemy = tool.type === 'mob' && button.textContent === MOB_LABEL[tool.kind];
+    const matchingEntity = (tool.type === 'spawn' && button.textContent === 'Player spawn')
+      || (tool.type === 'object' && button.textContent === entityLabelForObject(tool.object));
+    button.classList.toggle('active', matchingTile || matchingEnemy || matchingEntity);
+  }
+}
+
+function entityLabelForObject(object) {
+  const found = ENTITY_BRUSHES.find(brush => brush.object
+    && brush.object.kind === object.kind
+    && brush.object.tier === object.tier);
+  return found ? found.label : '';
+}
+
+canvas.oncontextmenu = e => e.preventDefault();
+canvas.onmousedown = e => {
+  if (!map) return;
+  lastMouse = [e.clientX, e.clientY];
+  if (e.button === 1 || e.button === 2 || e.altKey || e.shiftKey) {
+    panning = true;
+    return;
+  }
+  const [x, y] = cellFromMouse(e);
+  const mob = inBounds(x, y) ? mobAt(x, y) : null;
+  if (mob && activeTool.type !== 'tile' && activeTool.type !== 'erase') {
+    selected = { type: 'mob', mob };
+    draggingSelection = true;
+    return;
+  }
+  if (activeTool.type !== 'tile' && activeTool.type !== 'erase' && inBounds(x, y)) {
+    const object = map.objects[idx(x, y)];
+    const onSpawn = map.player_spawn[0] === x && map.player_spawn[1] === y;
+    if (object.kind !== 'none' || onSpawn) {
+      selectAt(x, y);
+      return;
+    }
+  }
+  painting = activeTool.type !== 'select' && activeTool.type !== 'spawn';
+  applyToolAt(x, y, { selectExisting: false });
+};
+window.onmouseup = () => { painting = false; panning = false; draggingSelection = false; };
+canvas.onmousemove = e => {
+  if (map) {
+    const [x, y] = cellFromMouse(e);
+    coords.textContent = inBounds(x, y) ? coordText(x, y) : 'Out of bounds';
+    if (draggingSelection && inBounds(x, y)) {
+      moveSelectionTo(x, y);
+    } else if (painting) {
+      applyToolAt(x, y, { selectExisting: false });
+    }
+  }
+  if (panning) {
+    panX += e.clientX - lastMouse[0];
+    panY += e.clientY - lastMouse[1];
+  }
+  lastMouse = [e.clientX, e.clientY];
+};
+canvas.onwheel = e => {
+  e.preventDefault();
+  if (!map) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const wx = (mx - panX) / scale;
+  const wy = (my - panY) / scale;
+  const next = Math.max(6, Math.min(64, scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+  panX = mx - wx * next;
+  panY = my - wy * next;
+  scale = next;
+};
+
+function coordText(x, y) {
+  const mob = mobAt(x, y);
+  const parts = [`${x},${y}`, `tile=${map.tiles[idx(x, y)]}`, `object=${map.objects[idx(x, y)].kind}`];
+  if (mob) parts.push(`enemy=${mob.kind}`);
+  return parts.join('  ');
+}
+
+window.addEventListener('keydown', e => {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  e.preventDefault();
+  deleteSelection();
+});
+
+requestAnimationFrame(draw);
+setStatus('Open or drop map.json to begin.');
+</script>
+</body>
+</html>

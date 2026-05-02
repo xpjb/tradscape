@@ -1,5 +1,8 @@
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
     response::{IntoResponse, Redirect},
     routing::get,
     Router,
@@ -11,10 +14,16 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
-    sync::{atomic::{AtomicU64, Ordering}, Arc},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
-use tokio::{net::TcpListener, sync::{mpsc, Mutex}};
+use tokio::{
+    net::TcpListener,
+    sync::{mpsc, Mutex},
+};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
@@ -29,22 +38,43 @@ type Pid = u64;
 type Mid = u64;
 
 static NEXT_PID: AtomicU64 = AtomicU64::new(1);
-fn new_pid() -> Pid { NEXT_PID.fetch_add(1, Ordering::Relaxed) }
+fn new_pid() -> Pid {
+    NEXT_PID.fetch_add(1, Ordering::Relaxed)
+}
 
 static RNG: AtomicU64 = AtomicU64::new(0xdead_beef_cafe_babe);
 fn rand_u64() -> u64 {
     let mut x = RNG.load(Ordering::Relaxed);
-    if x == 0 { x = 1; }
-    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+    if x == 0 {
+        x = 1;
+    }
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
     RNG.store(x, Ordering::Relaxed);
     x
 }
-fn rand_f() -> f32 { (rand_u64() as f64 / u64::MAX as f64) as f32 }
-fn rand_range(n: i32) -> i32 { if n <= 0 { 0 } else { (rand_u64() % n as u64) as i32 } }
+fn rand_f() -> f32 {
+    (rand_u64() as f64 / u64::MAX as f64) as f32
+}
+fn rand_range(n: i32) -> i32 {
+    if n <= 0 {
+        0
+    } else {
+        (rand_u64() % n as u64) as i32
+    }
+}
 
 #[derive(Clone, Copy, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum Tile { Grass, Dirt, Sand, Water, Stone, Path }
+enum Tile {
+    Grass,
+    Dirt,
+    Sand,
+    Water,
+    Stone,
+    Path,
+}
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -62,19 +92,46 @@ enum Obj {
 
 #[derive(Clone, Copy, Serialize, PartialEq)]
 #[serde(tag = "k", rename_all = "snake_case")]
-enum Intent { None, Chop, Mine, Pick, Fish, Talk, Attack { mid: Mid } }
+enum Intent {
+    None,
+    Chop,
+    Mine,
+    Pick,
+    Fish,
+    Talk,
+    Attack { mid: Mid },
+    Trade { pid: Pid },
+}
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 struct Skills {
-    woodcutting: i32, mining: i32, fishing: i32, attack: i32, strength: i32, defence: i32, hp: i32,
-    woodcutting_xp: i32, mining_xp: i32, fishing_xp: i32, attack_xp: i32, strength_xp: i32, defence_xp: i32, hp_xp: i32,
+    woodcutting: i32,
+    mining: i32,
+    fishing: i32,
+    attack: i32,
+    strength: i32,
+    defence: i32,
+    hp: i32,
+    woodcutting_xp: i32,
+    mining_xp: i32,
+    fishing_xp: i32,
+    attack_xp: i32,
+    strength_xp: i32,
+    defence_xp: i32,
+    hp_xp: i32,
     angel_points: i32,
 }
 impl Skills {
     fn starter() -> Self {
         Self {
-            woodcutting: 1, mining: 1, fishing: 1, attack: 1, strength: 1, defence: 1, hp: 10,
+            woodcutting: 1,
+            mining: 1,
+            fishing: 1,
+            attack: 1,
+            strength: 1,
+            defence: 1,
+            hp: 10,
             angel_points: 0,
             ..Default::default()
         }
@@ -82,27 +139,45 @@ impl Skills {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
-struct InvSlot { item: String, qty: i32 }
+struct InvSlot {
+    item: String,
+    qty: i32,
+}
 
 #[derive(Clone, Serialize)]
 struct ChatMsg {
     id: u64,
     tick: u64,
+    pid: Pid,
     name: String,
     text: String,
+}
+
+#[derive(Clone, Copy, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum TradeStage {
+    Offer,
+    Confirm,
 }
 
 struct Player {
     id: Pid,
     uuid: String,
     name: String,
-    x: i32, y: i32,
+    x: i32,
+    y: i32,
     hp_cur: i32,
     skills: Skills,
     inv: Vec<InvSlot>,
-    target: Option<(i32,i32)>,
+    target: Option<(i32, i32)>,
     intent: Intent,
     trade_open: bool,
+    trade_request_from: Option<Pid>,
+    trade_partner: Option<Pid>,
+    trade_stage: TradeStage,
+    trade_offer: Vec<usize>,
+    trade_accepted: bool,
+    trade_confirmed: bool,
     angel_modal_open: bool,
     private_chat: Vec<ChatMsg>,
     log: Vec<String>,
@@ -110,28 +185,83 @@ struct Player {
     regen_ctr: u32,
 }
 impl Player {
-    fn new(id: Pid, uuid: String, name: String, x: i32, y: i32, tx: mpsc::UnboundedSender<String>) -> Self {
+    fn new(
+        id: Pid,
+        uuid: String,
+        name: String,
+        x: i32,
+        y: i32,
+        tx: mpsc::UnboundedSender<String>,
+    ) -> Self {
         let inv = vec![InvSlot::default(); INV_SIZE];
-        Self { id, uuid, name, x, y, hp_cur: 10, skills: Skills::starter(), inv,
-               target: None, intent: Intent::None, trade_open: false, angel_modal_open: false,
-               private_chat: vec![], log: vec![], tx, regen_ctr: 0 }
+        Self {
+            id,
+            uuid,
+            name,
+            x,
+            y,
+            hp_cur: 10,
+            skills: Skills::starter(),
+            inv,
+            target: None,
+            intent: Intent::None,
+            trade_open: false,
+            trade_request_from: None,
+            trade_partner: None,
+            trade_stage: TradeStage::Offer,
+            trade_offer: vec![],
+            trade_accepted: false,
+            trade_confirmed: false,
+            angel_modal_open: false,
+            private_chat: vec![],
+            log: vec![],
+            tx,
+            regen_ctr: 0,
+        }
     }
 }
 
 struct Mob {
     id: Mid,
     kind: String,
-    x: i32, y: i32,
-    hp_cur: i32, hp_max: i32,
-    attack: i32, strength: i32, defence: i32,
-    home: (i32,i32),
+    x: i32,
+    y: i32,
+    hp_cur: i32,
+    hp_max: i32,
+    attack: i32,
+    strength: i32,
+    defence: i32,
+    home: (i32, i32),
     respawn_at: Option<u64>,
 }
 
-struct Game {
-    w: i32, h: i32,
+struct MobSpawn {
+    kind: &'static str,
+    x: i32,
+    y: i32,
+    hp: i32,
+    attack: i32,
+    strength: i32,
+    defence: i32,
+}
+
+struct MapDef {
+    w: i32,
+    h: i32,
     tiles: Vec<Tile>,
     objects: Vec<Obj>,
+    mobs: Vec<MobSpawn>,
+    player_spawn: (i32, i32),
+}
+
+include!(concat!(env!("OUT_DIR"), "/generated_map.rs"));
+
+struct Game {
+    w: i32,
+    h: i32,
+    tiles: Vec<Tile>,
+    objects: Vec<Obj>,
+    player_spawn: (i32, i32),
     players: HashMap<Pid, Player>,
     mobs: HashMap<Mid, Mob>,
     db: Connection,
@@ -144,92 +274,109 @@ struct Game {
 
 impl Game {
     fn new() -> Self {
-        let (w, h, tiles, objects) = build_map();
+        let MapDef {
+            w,
+            h,
+            tiles,
+            objects,
+            mobs,
+            player_spawn,
+        } = build_map();
         let db = open_db();
         let mut g = Self {
-            w, h, tiles, objects, players: HashMap::new(), mobs: HashMap::new(), db,
-            tick: 0, next_mid: 1, chat_seq: 0, chat: VecDeque::new(), events: Vec::new(),
+            w,
+            h,
+            tiles,
+            objects,
+            player_spawn,
+            players: HashMap::new(),
+            mobs: HashMap::new(),
+            db,
+            tick: 0,
+            next_mid: 1,
+            chat_seq: 0,
+            chat: VecDeque::new(),
+            events: Vec::new(),
         };
-        for (kind, x, y, hp, atk, str_, def) in [
-            ("goblin", 10 + MAP_WEST_PAD, 10, 7, 2, 2, 1),
-            ("goblin", 30 + MAP_WEST_PAD, 24, 7, 2, 2, 1),
-            ("goblin", 12 + MAP_WEST_PAD, 32, 7, 2, 2, 1),
-            ("goblin", 26 + MAP_WEST_PAD, 35, 12, 4, 4, 3),
-            // Tier 2 peninsula west (same stats as east dirt camp); tip max-west into new ocean.
-            ("club_goblin", 2, 18, 24, 8, 9, 6),
-            ("club_goblin", 3, 18, 24, 8, 9, 6),
-            ("club_goblin", 4, 18, 24, 8, 9, 6),
-            ("club_goblin", 5, 18, 24, 8, 9, 6),
-            ("club_goblin", 6, 18, 24, 8, 9, 6),
-            ("club_goblin", 7, 18, 24, 8, 9, 6),
-            ("club_goblin", 47 + MAP_WEST_PAD, 18, 24, 8, 9, 6),
-            ("club_goblin", 53 + MAP_WEST_PAD, 22, 24, 8, 9, 6),
-            ("club_goblin", 50 + MAP_WEST_PAD, 48, 28, 9, 10, 7),
-            ("club_goblin", 57 + MAP_WEST_PAD, 51, 28, 9, 10, 7),
-            // East of dragon grove: ninja yard with berry bushes (club goblins nearby).
-            ("ninja", 46 + MAP_WEST_PAD, 49, 42, 16, 17, 14),
-            ("ninja", 48 + MAP_WEST_PAD, 49, 48, 18, 19, 16),
-            ("ninja", 50 + MAP_WEST_PAD, 49, 42, 16, 17, 14),
-            ("ninja", 52 + MAP_WEST_PAD, 49, 48, 18, 19, 16),
-            ("ninja", 54 + MAP_WEST_PAD, 48, 42, 16, 17, 14),
-            ("ninja", 56 + MAP_WEST_PAD, 49, 48, 18, 19, 16),
-            ("ninja", 58 + MAP_WEST_PAD, 49, 42, 16, 17, 14),
-            ("ninja", 60 + MAP_WEST_PAD, 50, 48, 18, 19, 16),
-            ("ninja", 62 + MAP_WEST_PAD, 51, 42, 16, 17, 14),
-            ("ninja", 55 + MAP_WEST_PAD, 50, 48, 18, 19, 16),
-            ("ninja", 64 + MAP_WEST_PAD, 10, 42, 16, 17, 14),
-            ("ninja", 66 + MAP_WEST_PAD, 16, 42, 16, 17, 14),
-            ("ninja", 62 + MAP_WEST_PAD, 58, 48, 18, 19, 16),
-            ("ninja", 68 + MAP_WEST_PAD, 63, 48, 18, 19, 16),
-            // Magic grove: dragons — tough but fair (~2.5× ninja hp/atk/str/def).
-            ("dragon", 31 + MAP_WEST_PAD, 54, 105, 40, 43, 35),
-            ("dragon", 33 + MAP_WEST_PAD, 54, 105, 40, 43, 35),
-            ("dragon", 35 + MAP_WEST_PAD, 54, 120, 45, 48, 40),
-            ("dragon", 37 + MAP_WEST_PAD, 54, 120, 45, 48, 40),
-            ("dragon", 39 + MAP_WEST_PAD, 54, 105, 40, 43, 35),
-            ("dragon", 31 + MAP_WEST_PAD, 56, 120, 45, 48, 40),
-            ("dragon", 33 + MAP_WEST_PAD, 56, 105, 40, 43, 35),
-            ("dragon", 35 + MAP_WEST_PAD, 56, 120, 45, 48, 40),
-            ("dragon", 37 + MAP_WEST_PAD, 56, 105, 40, 43, 35),
-            ("dragon", 39 + MAP_WEST_PAD, 56, 120, 45, 48, 40),
-            ("dragon", 35 + MAP_WEST_PAD, 52, 120, 45, 48, 40),
-            ("dragon", 35 + MAP_WEST_PAD, 58, 105, 40, 43, 35),
-            // Western cobalt desert: elite guards.
-            ("dragon", 7 + MAP_WEST_PAD, 49, 105, 40, 43, 35),
-            ("dragon", 13 + MAP_WEST_PAD, 49, 120, 45, 48, 40),
-            ("dragon", 10 + MAP_WEST_PAD, 53, 105, 40, 43, 35),
-            ("ninja", 6 + MAP_WEST_PAD, 48, 42, 16, 17, 14),
-            ("ninja", 14 + MAP_WEST_PAD, 48, 48, 18, 19, 16),
-            ("ninja", 10 + MAP_WEST_PAD, 45, 42, 16, 17, 14),
-        ] {
-            g.spawn_mob(kind, x, y, hp, atk, str_, def);
+        for mob in mobs {
+            g.spawn_mob(
+                mob.kind,
+                mob.x,
+                mob.y,
+                mob.hp,
+                mob.attack,
+                mob.strength,
+                mob.defence,
+            );
         }
         g
     }
     fn spawn_mob(&mut self, kind: &str, x: i32, y: i32, hp: i32, atk: i32, str_: i32, def: i32) {
-        let id = self.next_mid; self.next_mid += 1;
-        self.mobs.insert(id, Mob {
-            id, kind: kind.into(), x, y, hp_cur: hp, hp_max: hp,
-            attack: atk, strength: str_, defence: def, home: (x,y), respawn_at: None,
-        });
+        let id = self.next_mid;
+        self.next_mid += 1;
+        self.mobs.insert(
+            id,
+            Mob {
+                id,
+                kind: kind.into(),
+                x,
+                y,
+                hp_cur: hp,
+                hp_max: hp,
+                attack: atk,
+                strength: str_,
+                defence: def,
+                home: (x, y),
+                respawn_at: None,
+            },
+        );
     }
-    fn idx(&self, x: i32, y: i32) -> usize { (y * self.w + x) as usize }
-    fn in_b(&self, x: i32, y: i32) -> bool { x >= 0 && y >= 0 && x < self.w && y < self.h }
-    fn tile(&self, x: i32, y: i32) -> Tile { self.tiles[self.idx(x, y)] }
-    fn obj(&self, x: i32, y: i32) -> &Obj { &self.objects[self.idx(x, y)] }
-    fn set_obj(&mut self, x: i32, y: i32, o: Obj) { let i = self.idx(x, y); self.objects[i] = o; }
+    fn idx(&self, x: i32, y: i32) -> usize {
+        (y * self.w + x) as usize
+    }
+    fn in_b(&self, x: i32, y: i32) -> bool {
+        x >= 0 && y >= 0 && x < self.w && y < self.h
+    }
+    fn tile(&self, x: i32, y: i32) -> Tile {
+        self.tiles[self.idx(x, y)]
+    }
+    fn obj(&self, x: i32, y: i32) -> &Obj {
+        &self.objects[self.idx(x, y)]
+    }
+    fn set_obj(&mut self, x: i32, y: i32, o: Obj) {
+        let i = self.idx(x, y);
+        self.objects[i] = o;
+    }
     fn occupant_pid(&self, x: i32, y: i32) -> Option<Pid> {
-        self.players.values().find(|p| p.x == x && p.y == y).map(|p| p.id)
+        self.players
+            .values()
+            .find(|p| p.x == x && p.y == y)
+            .map(|p| p.id)
     }
     fn occupant_mid(&self, x: i32, y: i32) -> Option<Mid> {
-        self.mobs.values().find(|m| m.respawn_at.is_none() && m.x == x && m.y == y).map(|m| m.id)
+        self.mobs
+            .values()
+            .find(|m| m.respawn_at.is_none() && m.x == x && m.y == y)
+            .map(|m| m.id)
     }
     fn walkable(&self, x: i32, y: i32, ignore_pid: Pid) -> bool {
-        if !self.in_b(x, y) { return false; }
-        if matches!(self.tile(x, y), Tile::Water) { return false; }
-        if !matches!(self.obj(x, y), Obj::None) { return false; }
-        if let Some(pid) = self.occupant_pid(x, y) { if pid != ignore_pid { return false; } }
-        if self.occupant_mid(x, y).is_some() { return false; }
+        if !self.in_b(x, y) {
+            return false;
+        }
+        if matches!(self.tile(x, y), Tile::Water) {
+            return false;
+        }
+        if !matches!(self.obj(x, y), Obj::None) {
+            return false;
+        }
+        if let Some(pid) = self.occupant_pid(x, y) {
+            if pid != ignore_pid {
+                return false;
+            }
+        }
+        if self.occupant_mid(x, y).is_some() {
+            return false;
+        }
         true
     }
 }
@@ -255,8 +402,9 @@ fn open_db() -> Connection {
             skills_json TEXT NOT NULL,
             inv_json TEXT NOT NULL,
             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-        );"
-    ).expect("create players table");
+        );",
+    )
+    .expect("create players table");
     let ver: i32 = db
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap_or(0);
@@ -272,13 +420,18 @@ fn open_db() -> Connection {
 }
 
 fn clean_name(name: &str) -> String {
-    let clean: String = name.chars()
+    let clean: String = name
+        .chars()
         .filter(|c| !c.is_control())
         .take(20)
         .collect::<String>()
         .trim()
         .to_string();
-    if clean.is_empty() { "Adventurer".into() } else { clean }
+    if clean.is_empty() {
+        "Adventurer".into()
+    } else {
+        clean
+    }
 }
 
 fn valid_uuid_or_new(raw: Option<&str>) -> String {
@@ -294,7 +447,8 @@ fn load_player(db: &Connection, uuid: &str) -> Option<SavedPlayer> {
         |row| {
             let skills_json: String = row.get(4)?;
             let inv_json: String = row.get(5)?;
-            let mut skills = serde_json::from_str(&skills_json).unwrap_or_else(|_| Skills::starter());
+            let mut skills =
+                serde_json::from_str(&skills_json).unwrap_or_else(|_| Skills::starter());
             skills.woodcutting = level_from_xp(skills.woodcutting_xp);
             skills.mining = level_from_xp(skills.mining_xp);
             skills.fishing = level_from_xp(skills.fishing_xp);
@@ -302,7 +456,8 @@ fn load_player(db: &Connection, uuid: &str) -> Option<SavedPlayer> {
             skills.strength = level_from_xp(skills.strength_xp);
             skills.defence = level_from_xp(skills.defence_xp);
             skills.hp = 10 + level_from_xp(skills.hp_xp) - 1;
-            let mut inv: Vec<InvSlot> = serde_json::from_str(&inv_json).unwrap_or_else(|_| vec![InvSlot::default(); INV_SIZE]);
+            let mut inv: Vec<InvSlot> = serde_json::from_str(&inv_json)
+                .unwrap_or_else(|_| vec![InvSlot::default(); INV_SIZE]);
             inv.resize(INV_SIZE, InvSlot::default());
             Ok(SavedPlayer {
                 name: row.get(0)?,
@@ -313,7 +468,9 @@ fn load_player(db: &Connection, uuid: &str) -> Option<SavedPlayer> {
                 inv,
             })
         },
-    ).optional().unwrap_or(None)
+    )
+    .optional()
+    .unwrap_or(None)
 }
 
 fn save_player(db: &Connection, p: &Player) {
@@ -334,38 +491,78 @@ fn save_player(db: &Connection, p: &Player) {
     );
 }
 
-fn manhattan(a: (i32,i32), b: (i32,i32)) -> i32 { (a.0 - b.0).abs() + (a.1 - b.1).abs() }
-fn chebyshev(a: (i32,i32), b: (i32,i32)) -> i32 { (a.0 - b.0).abs().max((a.1 - b.1).abs()) }
+fn manhattan(a: (i32, i32), b: (i32, i32)) -> i32 {
+    (a.0 - b.0).abs() + (a.1 - b.1).abs()
+}
+fn chebyshev(a: (i32, i32), b: (i32, i32)) -> i32 {
+    (a.0 - b.0).abs().max((a.1 - b.1).abs())
+}
 
 #[derive(Clone, Copy)]
-enum GoalKind { Step((i32,i32)), Adjacent((i32,i32)) }
+enum GoalKind {
+    Step((i32, i32)),
+    Adjacent((i32, i32)),
+}
 
-fn bfs(g: &Game, from: (i32,i32), goal: GoalKind, ignore_pid: Pid) -> Option<VecDeque<(i32,i32)>> {
-    let blocked = match goal { GoalKind::Adjacent(t) => Some(t), _ => None };
-    let goal_test = |p: (i32,i32)| match goal {
+fn bfs(
+    g: &Game,
+    from: (i32, i32),
+    goal: GoalKind,
+    ignore_pid: Pid,
+) -> Option<VecDeque<(i32, i32)>> {
+    let blocked = match goal {
+        GoalKind::Adjacent(t) => Some(t),
+        _ => None,
+    };
+    let goal_test = |p: (i32, i32)| match goal {
         GoalKind::Step(t) => p == t,
         GoalKind::Adjacent(t) => chebyshev(p, t) == 1,
     };
-    if goal_test(from) { return Some(VecDeque::new()); }
-    let mut prev: HashMap<(i32,i32),(i32,i32)> = HashMap::new();
+    if goal_test(from) {
+        return Some(VecDeque::new());
+    }
+    let mut prev: HashMap<(i32, i32), (i32, i32)> = HashMap::new();
     let mut q = VecDeque::new();
-    q.push_back(from); prev.insert(from, from);
+    q.push_back(from);
+    prev.insert(from, from);
     while let Some(cur) = q.pop_front() {
-        for (dx, dy) in [(1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)] {
+        for (dx, dy) in [
+            (1, 0),
+            (-1, 0),
+            (0, 1),
+            (0, -1),
+            (1, 1),
+            (1, -1),
+            (-1, 1),
+            (-1, -1),
+        ] {
             let n = (cur.0 + dx, cur.1 + dy);
-            if prev.contains_key(&n) { continue; }
-            if Some(n) == blocked { continue; }
-            if !g.walkable(n.0, n.1, ignore_pid) { continue; }
+            if prev.contains_key(&n) {
+                continue;
+            }
+            if Some(n) == blocked {
+                continue;
+            }
+            if !g.walkable(n.0, n.1, ignore_pid) {
+                continue;
+            }
             // anti-corner-cut: diagonal moves require both orthogonal neighbors walkable
             if dx != 0 && dy != 0 {
-                if !g.walkable(cur.0 + dx, cur.1, ignore_pid) { continue; }
-                if !g.walkable(cur.0, cur.1 + dy, ignore_pid) { continue; }
+                if !g.walkable(cur.0 + dx, cur.1, ignore_pid) {
+                    continue;
+                }
+                if !g.walkable(cur.0, cur.1 + dy, ignore_pid) {
+                    continue;
+                }
             }
             prev.insert(n, cur);
             if goal_test(n) {
                 let mut path = VecDeque::new();
                 let mut c = n;
-                while c != from { path.push_front(c); c = prev[&c]; }
+                while c != from {
+                    path.push_front(c);
+                    c = prev[&c];
+                }
                 return Some(path);
             }
             q.push_back(n);
@@ -435,29 +632,164 @@ struct ToolDef {
 }
 
 const TREE_DEFS: [ResourceDef; 4] = [
-    ResourceDef { tier: 1, name: "Pine Tree", item: "pine_logs", hp: 4, xp: 20, sell: 5, req_tool_tier: 1, regrow_secs: 25 },
-    ResourceDef { tier: 2, name: "Oak Tree", item: "oak_logs", hp: 10, xp: 55, sell: 50, req_tool_tier: 2, regrow_secs: 45 },
-    ResourceDef { tier: 3, name: "Yew Tree", item: "yew_logs", hp: 22, xp: 130, sell: 500, req_tool_tier: 3, regrow_secs: 75 },
-    ResourceDef { tier: 4, name: "Magic Tree", item: "magic_logs", hp: 48, xp: 320, sell: 5000, req_tool_tier: 4, regrow_secs: 110 },
+    ResourceDef {
+        tier: 1,
+        name: "Pine Tree",
+        item: "pine_logs",
+        hp: 4,
+        xp: 20,
+        sell: 5,
+        req_tool_tier: 1,
+        regrow_secs: 25,
+    },
+    ResourceDef {
+        tier: 2,
+        name: "Oak Tree",
+        item: "oak_logs",
+        hp: 10,
+        xp: 55,
+        sell: 50,
+        req_tool_tier: 2,
+        regrow_secs: 45,
+    },
+    ResourceDef {
+        tier: 3,
+        name: "Yew Tree",
+        item: "yew_logs",
+        hp: 22,
+        xp: 130,
+        sell: 500,
+        req_tool_tier: 3,
+        regrow_secs: 75,
+    },
+    ResourceDef {
+        tier: 4,
+        name: "Magic Tree",
+        item: "magic_logs",
+        hp: 48,
+        xp: 320,
+        sell: 5000,
+        req_tool_tier: 4,
+        regrow_secs: 110,
+    },
 ];
 
 const ROCK_DEFS: [ResourceDef; 4] = [
-    ResourceDef { tier: 1, name: "Copper Rock", item: "copper_ore", hp: 5, xp: 25, sell: 6, req_tool_tier: 1, regrow_secs: 30 },
-    ResourceDef { tier: 2, name: "Iron Rock", item: "iron_ore", hp: 12, xp: 65, sell: 60, req_tool_tier: 2, regrow_secs: 50 },
-    ResourceDef { tier: 3, name: "Gold Rock", item: "gold_ore", hp: 26, xp: 150, sell: 600, req_tool_tier: 3, regrow_secs: 80 },
-    ResourceDef { tier: 4, name: "Cobalt Rock", item: "cobalt_ore", hp: 54, xp: 340, sell: 6000, req_tool_tier: 4, regrow_secs: 110 },
+    ResourceDef {
+        tier: 1,
+        name: "Copper Rock",
+        item: "copper_ore",
+        hp: 5,
+        xp: 25,
+        sell: 6,
+        req_tool_tier: 1,
+        regrow_secs: 30,
+    },
+    ResourceDef {
+        tier: 2,
+        name: "Iron Rock",
+        item: "iron_ore",
+        hp: 12,
+        xp: 65,
+        sell: 60,
+        req_tool_tier: 2,
+        regrow_secs: 50,
+    },
+    ResourceDef {
+        tier: 3,
+        name: "Gold Rock",
+        item: "gold_ore",
+        hp: 26,
+        xp: 150,
+        sell: 600,
+        req_tool_tier: 3,
+        regrow_secs: 80,
+    },
+    ResourceDef {
+        tier: 4,
+        name: "Cobalt Rock",
+        item: "cobalt_ore",
+        hp: 54,
+        xp: 340,
+        sell: 6000,
+        req_tool_tier: 4,
+        regrow_secs: 110,
+    },
 ];
 
 const TOOL_DEFS: [ToolDef; 9] = [
-    ToolDef { item: "bronze_axe", name: "Bronze Axe", kind: "axe", tier: 1, buy: 10, power: 1 },
-    ToolDef { item: "iron_axe", name: "Iron Axe", kind: "axe", tier: 2, buy: 200, power: 2 },
-    ToolDef { item: "steel_axe", name: "Steel Axe", kind: "axe", tier: 3, buy: 4000, power: 4 },
-    ToolDef { item: "cobalt_axe", name: "Cobalt Axe", kind: "axe", tier: 4, buy: 30000, power: 8 },
-    ToolDef { item: "bronze_pickaxe", name: "Bronze Pickaxe", kind: "pickaxe", tier: 1, buy: 10, power: 1 },
-    ToolDef { item: "iron_pickaxe", name: "Iron Pickaxe", kind: "pickaxe", tier: 2, buy: 200, power: 2 },
-    ToolDef { item: "steel_pickaxe", name: "Steel Pickaxe", kind: "pickaxe", tier: 3, buy: 4000, power: 4 },
-    ToolDef { item: "cobalt_pickaxe", name: "Cobalt Pickaxe", kind: "pickaxe", tier: 4, buy: 30000, power: 8 },
-    ToolDef { item: "fishing_rod", name: "Fishing Rod", kind: "rod", tier: 2, buy: 200, power: 0 },
+    ToolDef {
+        item: "bronze_axe",
+        name: "Bronze Axe",
+        kind: "axe",
+        tier: 1,
+        buy: 10,
+        power: 1,
+    },
+    ToolDef {
+        item: "iron_axe",
+        name: "Iron Axe",
+        kind: "axe",
+        tier: 2,
+        buy: 200,
+        power: 2,
+    },
+    ToolDef {
+        item: "steel_axe",
+        name: "Steel Axe",
+        kind: "axe",
+        tier: 3,
+        buy: 4000,
+        power: 4,
+    },
+    ToolDef {
+        item: "cobalt_axe",
+        name: "Cobalt Axe",
+        kind: "axe",
+        tier: 4,
+        buy: 30000,
+        power: 8,
+    },
+    ToolDef {
+        item: "bronze_pickaxe",
+        name: "Bronze Pickaxe",
+        kind: "pickaxe",
+        tier: 1,
+        buy: 10,
+        power: 1,
+    },
+    ToolDef {
+        item: "iron_pickaxe",
+        name: "Iron Pickaxe",
+        kind: "pickaxe",
+        tier: 2,
+        buy: 200,
+        power: 2,
+    },
+    ToolDef {
+        item: "steel_pickaxe",
+        name: "Steel Pickaxe",
+        kind: "pickaxe",
+        tier: 3,
+        buy: 4000,
+        power: 4,
+    },
+    ToolDef {
+        item: "cobalt_pickaxe",
+        name: "Cobalt Pickaxe",
+        kind: "pickaxe",
+        tier: 4,
+        buy: 30000,
+        power: 8,
+    },
+    ToolDef {
+        item: "fishing_rod",
+        name: "Fishing Rod",
+        kind: "rod",
+        tier: 2,
+        buy: 200,
+        power: 0,
+    },
 ];
 
 fn tree_def(tier: i32) -> ResourceDef {
@@ -484,14 +816,24 @@ fn item_name(item: &str) -> &'static str {
         "salmon" => return "Salmon",
         _ => {}
     }
-    if let Some(t) = TOOL_DEFS.iter().find(|t| t.item == item) { return t.name; }
+    if let Some(t) = TOOL_DEFS.iter().find(|t| t.item == item) {
+        return t.name;
+    }
     "Item"
 }
 
 fn sell_value(item: &str) -> Option<i32> {
-    if item == "berries" { return Some(1); }
-    if item == "salmon" { return Some(35); }
-    TREE_DEFS.iter().chain(ROCK_DEFS.iter()).find(|r| r.item == item).map(|r| r.sell)
+    if item == "berries" {
+        return Some(1);
+    }
+    if item == "salmon" {
+        return Some(35);
+    }
+    TREE_DEFS
+        .iter()
+        .chain(ROCK_DEFS.iter())
+        .find(|r| r.item == item)
+        .map(|r| r.sell)
 }
 
 fn buy_price(item: &str) -> Option<i32> {
@@ -527,7 +869,8 @@ fn tool_def(item: &str) -> Option<ToolDef> {
 }
 
 fn best_tool(p: &Player, kind: &str) -> Option<ToolDef> {
-    p.inv.iter()
+    p.inv
+        .iter()
         .filter(|s| s.qty > 0)
         .filter_map(|s| tool_def(&s.item))
         .filter(|t| t.kind == kind)
@@ -552,33 +895,61 @@ fn fish_bite_chance(fishing_level: i32) -> f32 {
 
 fn add_inv(p: &mut Player, item: &str, qty: i32) -> bool {
     for s in p.inv.iter_mut() {
-        if s.item == item && s.qty > 0 { s.qty += qty; return true; }
+        if s.item == item && s.qty > 0 {
+            s.qty += qty;
+            return true;
+        }
     }
     for s in p.inv.iter_mut() {
-        if s.item.is_empty() { s.item = item.into(); s.qty = qty; return true; }
+        if s.item.is_empty() {
+            s.item = item.into();
+            s.qty = qty;
+            return true;
+        }
     }
     false
 }
-fn coin_count(p: &Player) -> i32 { p.inv.iter().filter(|s| s.item == "coins").map(|s| s.qty).sum() }
+fn coin_count(p: &Player) -> i32 {
+    p.inv
+        .iter()
+        .filter(|s| s.item == "coins")
+        .map(|s| s.qty)
+        .sum()
+}
 fn deduct_coins(p: &mut Player, amt: i32) -> bool {
-    if coin_count(p) < amt { return false; }
+    if coin_count(p) < amt {
+        return false;
+    }
     let mut left = amt;
     for s in p.inv.iter_mut() {
         if s.item == "coins" {
             let take = left.min(s.qty);
-            s.qty -= take; left -= take;
-            if s.qty == 0 { *s = InvSlot::default(); }
-            if left == 0 { return true; }
+            s.qty -= take;
+            left -= take;
+            if s.qty == 0 {
+                *s = InvSlot::default();
+            }
+            if left == 0 {
+                return true;
+            }
         }
     }
     true
 }
 
 fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
-    if !g.in_b(x, y) { return; }
+    if !g.in_b(x, y) {
+        return;
+    }
     if let Some(mid) = g.occupant_mid(x, y) {
         attack(g, pid, mid);
         return;
+    }
+    if let Some(other_pid) = g.occupant_pid(x, y) {
+        if other_pid != pid {
+            trade(g, pid, other_pid);
+            return;
+        }
     }
     let clicked_obj = g.obj(x, y).clone();
     let mut intent = match &clicked_obj {
@@ -590,17 +961,23 @@ fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
         _ => Intent::None,
     };
     if matches!(intent, Intent::None) && matches!(g.tile(x, y), Tile::Water) {
-        let rod_ok = g.players.get(&pid).map(|p| has_item(p, "fishing_rod")).unwrap_or(false);
+        let rod_ok = g
+            .players
+            .get(&pid)
+            .map(|p| has_item(p, "fishing_rod"))
+            .unwrap_or(false);
         if rod_ok {
             intent = Intent::Fish;
         }
     }
     let walk_ok = g.walkable(x, y, pid);
-    let p = g.players.get_mut(&pid).unwrap();
+    cancel_player_trade(g, pid, "Trade cancelled.");
     if !matches!(intent, Intent::Talk) {
+        let p = g.players.get_mut(&pid).unwrap();
         p.trade_open = false;
         p.angel_modal_open = false;
     } else {
+        let p = g.players.get_mut(&pid).unwrap();
         match clicked_obj {
             Obj::Trader => {
                 p.angel_modal_open = false;
@@ -611,31 +988,64 @@ fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
             _ => {}
         }
     }
+    let p = g.players.get_mut(&pid).unwrap();
     if matches!(intent, Intent::None) {
-        if walk_ok { p.target = Some((x, y)); p.intent = Intent::None; }
-        else { p.target = None; p.intent = Intent::None; }
+        if walk_ok {
+            p.target = Some((x, y));
+            p.intent = Intent::None;
+        } else {
+            p.target = None;
+            p.intent = Intent::None;
+        }
     } else {
         p.target = Some((x, y));
         p.intent = intent;
     }
 }
 
+fn trade(g: &mut Game, pid: Pid, other_pid: Pid) {
+    if pid == other_pid {
+        return;
+    }
+    let Some(other) = g.players.get(&other_pid) else {
+        return;
+    };
+    let (tx, ty) = (other.x, other.y);
+    cancel_player_trade(g, pid, "Trade cancelled.");
+    let p = g.players.get_mut(&pid).unwrap();
+    p.trade_open = false;
+    p.angel_modal_open = false;
+    p.intent = Intent::Trade { pid: other_pid };
+    p.target = Some((tx, ty));
+}
+
 fn attack(g: &mut Game, pid: Pid, mid: Mid) {
-    let Some(m) = g.mobs.get(&mid) else { return; };
-    if m.respawn_at.is_some() { return; }
+    let Some(m) = g.mobs.get(&mid) else {
+        return;
+    };
+    if m.respawn_at.is_some() {
+        return;
+    }
+    let target = (m.x, m.y);
+    cancel_player_trade(g, pid, "Trade cancelled.");
     let p = g.players.get_mut(&pid).unwrap();
     p.trade_open = false;
     p.angel_modal_open = false;
     p.intent = Intent::Attack { mid };
-    p.target = Some((m.x, m.y));
+    p.target = Some(target);
 }
 
 fn near_trader(g: &Game, pid: Pid) -> bool {
     let p = &g.players[&pid];
-    for dy in -1..=1i32 { for dx in -1..=1i32 {
-        let nx = p.x + dx; let ny = p.y + dy;
-        if g.in_b(nx, ny) && matches!(g.obj(nx, ny), Obj::Trader) { return true; }
-    }}
+    for dy in -1..=1i32 {
+        for dx in -1..=1i32 {
+            let nx = p.x + dx;
+            let ny = p.y + dy;
+            if g.in_b(nx, ny) && matches!(g.obj(nx, ny), Obj::Trader) {
+                return true;
+            }
+        }
+    }
     false
 }
 
@@ -651,6 +1061,266 @@ fn near_angel(g: &Game, pid: Pid) -> bool {
         }
     }
     false
+}
+
+fn reset_player_trade_fields(p: &mut Player) {
+    p.trade_partner = None;
+    p.trade_stage = TradeStage::Offer;
+    p.trade_offer.clear();
+    p.trade_accepted = false;
+    p.trade_confirmed = false;
+}
+
+fn cancel_player_trade(g: &mut Game, pid: Pid, other_msg: &str) {
+    let partner = g.players.get(&pid).and_then(|p| p.trade_partner);
+    if let Some(p) = g.players.get_mut(&pid) {
+        reset_player_trade_fields(p);
+    }
+    if let Some(other_pid) = partner {
+        if let Some(other) = g.players.get_mut(&other_pid) {
+            if other.trade_partner == Some(pid) {
+                reset_player_trade_fields(other);
+                other.log.push(other_msg.into());
+            }
+        }
+    }
+}
+
+fn begin_player_trade(g: &mut Game, a: Pid, b: Pid) {
+    if !g.players.contains_key(&a) || !g.players.contains_key(&b) {
+        return;
+    }
+    cancel_player_trade(g, a, "Trade cancelled.");
+    cancel_player_trade(g, b, "Trade cancelled.");
+    let a_name = g.players[&a].name.clone();
+    let b_name = g.players[&b].name.clone();
+    if let Some(pa) = g.players.get_mut(&a) {
+        reset_player_trade_fields(pa);
+        pa.trade_partner = Some(b);
+        pa.trade_request_from = None;
+        pa.trade_open = false;
+        pa.angel_modal_open = false;
+        pa.intent = Intent::None;
+        pa.target = None;
+        pa.log.push(format!("Trading with {}.", b_name));
+    }
+    if let Some(pb) = g.players.get_mut(&b) {
+        reset_player_trade_fields(pb);
+        pb.trade_partner = Some(a);
+        pb.trade_request_from = None;
+        pb.trade_open = false;
+        pb.angel_modal_open = false;
+        pb.intent = Intent::None;
+        pb.target = None;
+        pb.log.push(format!("Trading with {}.", a_name));
+    }
+}
+
+fn request_player_trade(g: &mut Game, pid: Pid, other_pid: Pid) {
+    if pid == other_pid || !g.players.contains_key(&pid) || !g.players.contains_key(&other_pid) {
+        return;
+    }
+    if g.players.get(&pid).and_then(|p| p.trade_request_from) == Some(other_pid) {
+        begin_player_trade(g, pid, other_pid);
+        return;
+    }
+    let name = g.players[&pid].name.clone();
+    let other_name = g.players[&other_pid].name.clone();
+    if let Some(other) = g.players.get_mut(&other_pid) {
+        other.trade_request_from = Some(pid);
+    }
+    if let Some(p) = g.players.get_mut(&pid) {
+        p.log
+            .push(format!("Sending trade offer to {}...", other_name));
+    }
+    push_private_chat(g, other_pid, format!("{} wishes to trade with you.", name));
+}
+
+fn reset_trade_accepts(g: &mut Game, pid: Pid) {
+    let partner = g.players.get(&pid).and_then(|p| p.trade_partner);
+    for id in [Some(pid), partner].into_iter().flatten() {
+        if let Some(p) = g.players.get_mut(&id) {
+            p.trade_stage = TradeStage::Offer;
+            p.trade_accepted = false;
+            p.trade_confirmed = false;
+        }
+    }
+}
+
+fn trade_offer_slot(g: &mut Game, pid: Pid, slot: usize) {
+    if slot >= INV_SIZE {
+        return;
+    }
+    let partner = g.players.get(&pid).and_then(|p| p.trade_partner);
+    if partner.is_none() {
+        return;
+    }
+    let Some(p) = g.players.get_mut(&pid) else {
+        return;
+    };
+    if p.inv.get(slot).map(|s| s.item.is_empty()).unwrap_or(true) {
+        return;
+    }
+    if p.trade_offer.contains(&slot) {
+        p.trade_offer.retain(|s| *s != slot);
+    } else {
+        p.trade_offer.push(slot);
+    }
+    reset_trade_accepts(g, pid);
+}
+
+fn trade_accept(g: &mut Game, pid: Pid) {
+    let Some(partner) = g.players.get(&pid).and_then(|p| p.trade_partner) else {
+        return;
+    };
+    if g.players.get(&partner).and_then(|p| p.trade_partner) != Some(pid) {
+        cancel_player_trade(g, pid, "Trade cancelled.");
+        return;
+    }
+    if let Some(p) = g.players.get_mut(&pid) {
+        p.trade_accepted = true;
+    }
+    let both = g
+        .players
+        .get(&pid)
+        .map(|p| p.trade_accepted)
+        .unwrap_or(false)
+        && g.players
+            .get(&partner)
+            .map(|p| p.trade_accepted)
+            .unwrap_or(false);
+    if both {
+        for id in [pid, partner] {
+            if let Some(p) = g.players.get_mut(&id) {
+                p.trade_stage = TradeStage::Confirm;
+                p.trade_confirmed = false;
+            }
+        }
+    }
+}
+
+fn trade_confirm(g: &mut Game, pid: Pid) {
+    let Some(partner) = g.players.get(&pid).and_then(|p| p.trade_partner) else {
+        return;
+    };
+    if g.players.get(&pid).map(|p| p.trade_stage) != Some(TradeStage::Confirm)
+        || g.players.get(&partner).map(|p| p.trade_stage) != Some(TradeStage::Confirm)
+    {
+        return;
+    }
+    if let Some(p) = g.players.get_mut(&pid) {
+        p.trade_confirmed = true;
+    }
+    let both = g
+        .players
+        .get(&pid)
+        .map(|p| p.trade_confirmed)
+        .unwrap_or(false)
+        && g.players
+            .get(&partner)
+            .map(|p| p.trade_confirmed)
+            .unwrap_or(false);
+    if both {
+        complete_player_trade(g, pid, partner);
+    }
+}
+
+fn offer_items_from_slots(inv: &[InvSlot], slots: &[usize]) -> Option<Vec<(usize, InvSlot)>> {
+    let mut out = Vec::new();
+    for &slot in slots {
+        if slot >= INV_SIZE || out.iter().any(|(s, _)| *s == slot) {
+            return None;
+        }
+        let it = inv.get(slot)?.clone();
+        if it.item.is_empty() || it.qty <= 0 {
+            return None;
+        }
+        out.push((slot, it));
+    }
+    Some(out)
+}
+
+fn add_inv_to_slots(inv: &mut Vec<InvSlot>, item: &str, qty: i32) -> bool {
+    for s in inv.iter_mut() {
+        if s.item == item && s.qty > 0 {
+            s.qty += qty;
+            return true;
+        }
+    }
+    for s in inv.iter_mut() {
+        if s.item.is_empty() {
+            s.item = item.into();
+            s.qty = qty;
+            return true;
+        }
+    }
+    false
+}
+
+fn can_receive_trade_items(p: &Player, incoming: &[InvSlot], outgoing_slots: &[usize]) -> bool {
+    let Some(outgoing) = offer_items_from_slots(&p.inv, outgoing_slots) else {
+        return false;
+    };
+    let mut inv = p.inv.clone();
+    for (slot, _) in outgoing {
+        inv[slot] = InvSlot::default();
+    }
+    for it in incoming {
+        if !add_inv_to_slots(&mut inv, &it.item, it.qty) {
+            return false;
+        }
+    }
+    true
+}
+
+fn complete_player_trade(g: &mut Game, a: Pid, b: Pid) {
+    if g.players.get(&a).and_then(|p| p.trade_partner) != Some(b)
+        || g.players.get(&b).and_then(|p| p.trade_partner) != Some(a)
+    {
+        return;
+    }
+    let a_slots = g.players[&a].trade_offer.clone();
+    let b_slots = g.players[&b].trade_offer.clone();
+    let Some(a_offer) = offer_items_from_slots(&g.players[&a].inv, &a_slots) else {
+        cancel_player_trade(g, a, "Trade cancelled.");
+        return;
+    };
+    let Some(b_offer) = offer_items_from_slots(&g.players[&b].inv, &b_slots) else {
+        cancel_player_trade(g, b, "Trade cancelled.");
+        return;
+    };
+    let a_items: Vec<InvSlot> = a_offer.iter().map(|(_, it)| it.clone()).collect();
+    let b_items: Vec<InvSlot> = b_offer.iter().map(|(_, it)| it.clone()).collect();
+    if !can_receive_trade_items(&g.players[&a], &b_items, &a_slots)
+        || !can_receive_trade_items(&g.players[&b], &a_items, &b_slots)
+    {
+        cancel_player_trade(g, a, "Trade cancelled.");
+        if let Some(pa) = g.players.get_mut(&a) {
+            pa.log
+                .push("Trade cancelled: not enough inventory space.".into());
+        }
+        return;
+    }
+    if let Some(pa) = g.players.get_mut(&a) {
+        for (slot, _) in &a_offer {
+            pa.inv[*slot] = InvSlot::default();
+        }
+        for it in &b_items {
+            add_inv(pa, &it.item, it.qty);
+        }
+        reset_player_trade_fields(pa);
+        pa.log.push("Accepted trade.".into());
+    }
+    if let Some(pb) = g.players.get_mut(&b) {
+        for (slot, _) in &b_offer {
+            pb.inv[*slot] = InvSlot::default();
+        }
+        for it in &a_items {
+            add_inv(pb, &it.item, it.qty);
+        }
+        reset_player_trade_fields(pb);
+        pb.log.push("Accepted trade.".into());
+    }
 }
 
 fn angel_decline(g: &mut Game, pid: Pid) {
@@ -686,16 +1356,24 @@ fn angel_sacrifice(g: &mut Game, pid: Pid) {
 
 fn buy(g: &mut Game, pid: Pid, item: &str) {
     if !near_trader(g, pid) {
-        if let Some(p) = g.players.get_mut(&pid) { p.log.push("Stand next to the trader.".into()); }
+        if let Some(p) = g.players.get_mut(&pid) {
+            p.log.push("Stand next to the trader.".into());
+        }
         return;
     }
-    let Some(price) = buy_price(item) else { return; };
+    let Some(price) = buy_price(item) else {
+        return;
+    };
     let p = g.players.get_mut(&pid).unwrap();
     if has_item(p, item) {
-        p.log.push(format!("You already have a {}.", item_name(item)));
+        p.log
+            .push(format!("You already have a {}.", item_name(item)));
         return;
     }
-    if !deduct_coins(p, price) { p.log.push("Not enough coins.".into()); return; }
+    if !deduct_coins(p, price) {
+        p.log.push("Not enough coins.".into());
+        return;
+    }
     if add_inv(p, item, 1) {
         p.log.push(format!("You buy a {}.", item_name(item)));
     } else {
@@ -705,13 +1383,19 @@ fn buy(g: &mut Game, pid: Pid, item: &str) {
 }
 fn sell(g: &mut Game, pid: Pid, slot: usize) {
     if !near_trader(g, pid) {
-        if let Some(p) = g.players.get_mut(&pid) { p.log.push("Stand next to the trader.".into()); }
+        if let Some(p) = g.players.get_mut(&pid) {
+            p.log.push("Stand next to the trader.".into());
+        }
         return;
     }
     let p = g.players.get_mut(&pid).unwrap();
-    if slot >= INV_SIZE { return; }
+    if slot >= INV_SIZE {
+        return;
+    }
     let item = p.inv[slot].item.clone();
-    if item.is_empty() || item == "coins" { return; }
+    if item.is_empty() || item == "coins" {
+        return;
+    }
     let Some(unit) = item_value(&item) else {
         p.log.push("The trader does not buy that.".into());
         return;
@@ -719,7 +1403,8 @@ fn sell(g: &mut Game, pid: Pid, slot: usize) {
     let qty = p.inv[slot].qty;
     p.inv[slot] = InvSlot::default();
     add_inv(p, "coins", unit * qty);
-    p.log.push(format!("Sold {}x{} for {}gp.", item, qty, unit * qty));
+    p.log
+        .push(format!("Sold {}x{} for {}gp.", item, qty, unit * qty));
 }
 
 fn push_private_chat(g: &mut Game, pid: Pid, text: impl Into<String>) {
@@ -727,6 +1412,7 @@ fn push_private_chat(g: &mut Game, pid: Pid, text: impl Into<String>) {
     let msg = ChatMsg {
         id: g.chat_seq,
         tick: g.tick,
+        pid: 0,
         name: "System".into(),
         text: text.into(),
     };
@@ -737,9 +1423,13 @@ fn push_private_chat(g: &mut Game, pid: Pid, text: impl Into<String>) {
 
 fn add_chat(g: &mut Game, pid: Pid, text: &str) {
     let text = text.trim();
-    if text.is_empty() { return; }
+    if text.is_empty() {
+        return;
+    }
     let clean: String = text.chars().filter(|c| !c.is_control()).take(160).collect();
-    if clean.is_empty() { return; }
+    if clean.is_empty() {
+        return;
+    }
 
     if clean == "/help" {
         push_private_chat(g, pid, "Commands: /help, /nick name");
@@ -760,6 +1450,7 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) {
         g.chat.push_back(ChatMsg {
             id: g.chat_seq,
             tick: g.tick,
+            pid: 0,
             name: "System".into(),
             text: format!("{} is now known as {}.", old_name, new_name),
         });
@@ -773,16 +1464,28 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) {
         return;
     }
 
-    let name = g.players.get(&pid).map(|p| p.name.clone()).unwrap_or_else(|| "anon".into());
+    let name = g
+        .players
+        .get(&pid)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| "anon".into());
     g.chat_seq += 1;
-    g.chat.push_back(ChatMsg { id: g.chat_seq, tick: g.tick, name, text: clean });
+    g.chat.push_back(ChatMsg {
+        id: g.chat_seq,
+        tick: g.tick,
+        pid,
+        name,
+        text: clean,
+    });
     while g.chat.len() > 50 {
         g.chat.pop_front();
     }
 }
 fn eat(g: &mut Game, pid: Pid, slot: usize) {
     let p = g.players.get_mut(&pid).unwrap();
-    if slot >= INV_SIZE || p.inv[slot].qty <= 0 { return; }
+    if slot >= INV_SIZE || p.inv[slot].qty <= 0 {
+        return;
+    }
     if p.hp_cur >= p.skills.hp {
         p.log.push("You're already at full health.".into());
         return;
@@ -793,7 +1496,9 @@ fn eat(g: &mut Game, pid: Pid, slot: usize) {
         _ => return,
     };
     p.inv[slot].qty -= 1;
-    if p.inv[slot].qty == 0 { p.inv[slot] = InvSlot::default(); }
+    if p.inv[slot].qty == 0 {
+        p.inv[slot] = InvSlot::default();
+    }
     p.hp_cur = (p.hp_cur + amt).min(p.skills.hp);
     p.log.push(msg.into());
 }
@@ -803,7 +1508,9 @@ fn roll_hit(atk: i32, def: i32, str_: i32) -> i32 {
     if rand_f() < acc {
         let max = 1 + str_ / 4;
         1 + rand_range(max)
-    } else { 0 }
+    } else {
+        0
+    }
 }
 
 fn mob_name(kind: &str) -> &'static str {
@@ -833,7 +1540,10 @@ fn mob_aggro_radius(kind: &str) -> i32 {
 
 fn process_player(g: &mut Game, pid: Pid) {
     let (pos, intent, target) = {
-        let p = match g.players.get(&pid) { Some(p) => p, None => return };
+        let p = match g.players.get(&pid) {
+            Some(p) => p,
+            None => return,
+        };
         ((p.x, p.y), p.intent, p.target)
     };
     let target = match intent {
@@ -841,15 +1551,32 @@ fn process_player(g: &mut Game, pid: Pid) {
             Some(m) if m.respawn_at.is_none() => Some((m.x, m.y)),
             _ => {
                 let p = g.players.get_mut(&pid).unwrap();
-                p.intent = Intent::None; p.target = None;
+                p.intent = Intent::None;
+                p.target = None;
+                return;
+            }
+        },
+        Intent::Trade { pid: other_pid } => match g.players.get(&other_pid) {
+            Some(other) => Some((other.x, other.y)),
+            None => {
+                let p = g.players.get_mut(&pid).unwrap();
+                p.intent = Intent::None;
+                p.target = None;
+                p.log.push("They are no longer here.".into());
                 return;
             }
         },
         _ => target,
     };
-    let Some(t) = target else { return; };
+    let Some(t) = target else {
+        return;
+    };
     let needs_adj = !matches!(intent, Intent::None);
-    let at_goal = if needs_adj { chebyshev(pos, t) == 1 } else { pos == t };
+    let at_goal = if needs_adj {
+        chebyshev(pos, t) == 1
+    } else {
+        pos == t
+    };
     if at_goal {
         match intent {
             Intent::Chop => do_chop(g, pid, t),
@@ -857,6 +1584,13 @@ fn process_player(g: &mut Game, pid: Pid) {
             Intent::Pick => do_pick(g, pid, t),
             Intent::Fish => do_fish(g, pid, t),
             Intent::Attack { mid } => do_attack(g, pid, mid),
+            Intent::Trade { pid: other_pid } => {
+                request_player_trade(g, pid, other_pid);
+                if let Some(p) = g.players.get_mut(&pid) {
+                    p.intent = Intent::None;
+                    p.target = None;
+                }
+            }
             Intent::Talk => {
                 let talk_obj = g.obj(t.0, t.1).clone();
                 let p = g.players.get_mut(&pid).unwrap();
@@ -878,22 +1612,28 @@ fn process_player(g: &mut Game, pid: Pid) {
         }
         return;
     }
-    let goal_kind = if needs_adj { GoalKind::Adjacent(t) } else { GoalKind::Step(t) };
+    let goal_kind = if needs_adj {
+        GoalKind::Adjacent(t)
+    } else {
+        GoalKind::Step(t)
+    };
     if let Some(mut path) = bfs(g, pos, goal_kind, pid) {
         if let Some(step) = path.pop_front() {
             if g.walkable(step.0, step.1, pid) {
                 let p = g.players.get_mut(&pid).unwrap();
-                p.x = step.0; p.y = step.1;
+                p.x = step.0;
+                p.y = step.1;
             }
         }
     } else {
         let p = g.players.get_mut(&pid).unwrap();
-        p.intent = Intent::None; p.target = None;
+        p.intent = Intent::None;
+        p.target = None;
         p.log.push("Can't reach there.".into());
     }
 }
 
-fn do_chop(g: &mut Game, pid: Pid, t: (i32,i32)) {
+fn do_chop(g: &mut Game, pid: Pid, t: (i32, i32)) {
     let (tool, level) = {
         let p = g.players.get(&pid).unwrap();
         (best_tool(p, "axe"), p.skills.woodcutting)
@@ -901,15 +1641,22 @@ fn do_chop(g: &mut Game, pid: Pid, t: (i32,i32)) {
     let Some(tool) = tool else {
         let p = g.players.get_mut(&pid).unwrap();
         p.log.push("You need an axe.".into());
-        p.intent = Intent::None; p.target = None; return;
+        p.intent = Intent::None;
+        p.target = None;
+        return;
     };
     let obj = g.obj(t.0, t.1).clone();
     if let Obj::Tree { tier, hp } = obj {
         let def = tree_def(tier);
         if tool.tier < def.req_tool_tier {
             let p = g.players.get_mut(&pid).unwrap();
-            p.log.push(format!("You need a tier {} axe for {}.", def.req_tool_tier, def.name));
-            p.intent = Intent::None; p.target = None; return;
+            p.log.push(format!(
+                "You need a tier {} axe for {}.",
+                def.req_tool_tier, def.name
+            ));
+            p.intent = Intent::None;
+            p.target = None;
+            return;
         }
         g.events.push(json!({"k":"chop","x":t.0,"y":t.1}));
         if !gather_success(level, tier) {
@@ -920,24 +1667,36 @@ fn do_chop(g: &mut Game, pid: Pid, t: (i32,i32)) {
         let dmg = tool.power + level / 12;
         let new_hp = hp - dmg;
         if new_hp <= 0 {
-            g.set_obj(t.0, t.1, Obj::Stump { tier, regrow: g.tick + def.regrow_secs * TPS });
+            g.set_obj(
+                t.0,
+                t.1,
+                Obj::Stump {
+                    tier,
+                    regrow: g.tick + def.regrow_secs * TPS,
+                },
+            );
             let p = g.players.get_mut(&pid).unwrap();
-            if add_inv(p, def.item, 1) { p.log.push(format!("You get {}.", item_name(def.item))); }
-            else { p.log.push("Inventory full!".into()); }
+            if add_inv(p, def.item, 1) {
+                p.log.push(format!("You get {}.", item_name(def.item)));
+            } else {
+                p.log.push("Inventory full!".into());
+            }
             let ap = p.skills.angel_points;
             p.skills.woodcutting_xp += xp_with_bonus(def.xp, ap);
             p.skills.woodcutting = level_from_xp(p.skills.woodcutting_xp);
             log_level_up(&mut p.log, "Woodcutting", level, p.skills.woodcutting);
-            p.intent = Intent::None; p.target = None;
+            p.intent = Intent::None;
+            p.target = None;
         } else {
             g.set_obj(t.0, t.1, Obj::Tree { tier, hp: new_hp });
         }
     } else {
         let p = g.players.get_mut(&pid).unwrap();
-        p.intent = Intent::None; p.target = None;
+        p.intent = Intent::None;
+        p.target = None;
     }
 }
-fn do_mine(g: &mut Game, pid: Pid, t: (i32,i32)) {
+fn do_mine(g: &mut Game, pid: Pid, t: (i32, i32)) {
     let (tool, level) = {
         let p = g.players.get(&pid).unwrap();
         (best_tool(p, "pickaxe"), p.skills.mining)
@@ -945,15 +1704,22 @@ fn do_mine(g: &mut Game, pid: Pid, t: (i32,i32)) {
     let Some(tool) = tool else {
         let p = g.players.get_mut(&pid).unwrap();
         p.log.push("You need a pickaxe.".into());
-        p.intent = Intent::None; p.target = None; return;
+        p.intent = Intent::None;
+        p.target = None;
+        return;
     };
     let obj = g.obj(t.0, t.1).clone();
     if let Obj::Rock { tier, hp } = obj {
         let def = rock_def(tier);
         if tool.tier < def.req_tool_tier {
             let p = g.players.get_mut(&pid).unwrap();
-            p.log.push(format!("You need a tier {} pickaxe for {}.", def.req_tool_tier, def.name));
-            p.intent = Intent::None; p.target = None; return;
+            p.log.push(format!(
+                "You need a tier {} pickaxe for {}.",
+                def.req_tool_tier, def.name
+            ));
+            p.intent = Intent::None;
+            p.target = None;
+            return;
         }
         g.events.push(json!({"k":"mine","x":t.0,"y":t.1}));
         if !gather_success(level, tier) {
@@ -964,24 +1730,36 @@ fn do_mine(g: &mut Game, pid: Pid, t: (i32,i32)) {
         let dmg = tool.power + level / 12;
         let new_hp = hp - dmg;
         if new_hp <= 0 {
-            g.set_obj(t.0, t.1, Obj::DepletedRock { tier, regrow: g.tick + def.regrow_secs * TPS });
+            g.set_obj(
+                t.0,
+                t.1,
+                Obj::DepletedRock {
+                    tier,
+                    regrow: g.tick + def.regrow_secs * TPS,
+                },
+            );
             let p = g.players.get_mut(&pid).unwrap();
-            if add_inv(p, def.item, 1) { p.log.push(format!("You mine {}.", item_name(def.item))); }
-            else { p.log.push("Inventory full!".into()); }
+            if add_inv(p, def.item, 1) {
+                p.log.push(format!("You mine {}.", item_name(def.item)));
+            } else {
+                p.log.push("Inventory full!".into());
+            }
             let ap = p.skills.angel_points;
             p.skills.mining_xp += xp_with_bonus(def.xp, ap);
             p.skills.mining = level_from_xp(p.skills.mining_xp);
             log_level_up(&mut p.log, "Mining", level, p.skills.mining);
-            p.intent = Intent::None; p.target = None;
+            p.intent = Intent::None;
+            p.target = None;
         } else {
             g.set_obj(t.0, t.1, Obj::Rock { tier, hp: new_hp });
         }
     } else {
         let p = g.players.get_mut(&pid).unwrap();
-        p.intent = Intent::None; p.target = None;
+        p.intent = Intent::None;
+        p.target = None;
     }
 }
-fn do_fish(g: &mut Game, pid: Pid, t: (i32,i32)) {
+fn do_fish(g: &mut Game, pid: Pid, t: (i32, i32)) {
     let (has_rod, level) = {
         let p = g.players.get(&pid).unwrap();
         (has_item(p, "fishing_rod"), p.skills.fishing)
@@ -1023,34 +1801,48 @@ fn do_fish(g: &mut Game, pid: Pid, t: (i32,i32)) {
     p.target = None;
 }
 
-fn do_pick(g: &mut Game, pid: Pid, t: (i32,i32)) {
+fn do_pick(g: &mut Game, pid: Pid, t: (i32, i32)) {
     let obj = g.obj(t.0, t.1).clone();
     if let Obj::Bush { berries, .. } = obj {
         if berries > 0 {
             let new_berries = berries - 1;
-            g.set_obj(t.0, t.1, Obj::Bush { berries: new_berries, regrow: g.tick + 8 * TPS });
+            g.set_obj(
+                t.0,
+                t.1,
+                Obj::Bush {
+                    berries: new_berries,
+                    regrow: g.tick + 8 * TPS,
+                },
+            );
             g.events.push(json!({"k":"pick","x":t.0,"y":t.1}));
             let p = g.players.get_mut(&pid).unwrap();
             if !add_inv(p, "berries", 1) {
                 p.log.push("Inventory full!".into());
-                p.intent = Intent::None; p.target = None;
+                p.intent = Intent::None;
+                p.target = None;
                 return;
             }
             p.log.push("You pick a berry.".into());
             if new_berries == 0 {
-                p.intent = Intent::None; p.target = None;
+                p.intent = Intent::None;
+                p.target = None;
             }
         } else {
             let p = g.players.get_mut(&pid).unwrap();
-            p.intent = Intent::None; p.target = None;
+            p.intent = Intent::None;
+            p.target = None;
         }
     } else {
         let p = g.players.get_mut(&pid).unwrap();
-        p.intent = Intent::None; p.target = None;
+        p.intent = Intent::None;
+        p.target = None;
     }
 }
 fn do_attack(g: &mut Game, pid: Pid, mid: Mid) {
-    let (atk, str_) = { let p = g.players.get(&pid).unwrap(); (p.skills.attack, p.skills.strength) };
+    let (atk, str_) = {
+        let p = g.players.get(&pid).unwrap();
+        (p.skills.attack, p.skills.strength)
+    };
     let (mdef, mx, my, kind) = match g.mobs.get(&mid) {
         Some(m) => (m.defence, m.x, m.y, m.kind.clone()),
         _ => return,
@@ -1061,7 +1853,9 @@ fn do_attack(g: &mut Game, pid: Pid, mid: Mid) {
         m.hp_cur = (m.hp_cur - dmg).max(0);
         m.hp_cur == 0
     };
-    g.events.push(json!({"k": if dmg == 0 { "miss_mob" } else { "hit_mob" }, "x": mx, "y": my, "dmg": dmg}));
+    g.events.push(
+        json!({"k": if dmg == 0 { "miss_mob" } else { "hit_mob" }, "x": mx, "y": my, "dmg": dmg}),
+    );
     let p = g.players.get_mut(&pid).unwrap();
     p.log.push(if dmg == 0 {
         format!("You miss the {}.", mob_name(&kind))
@@ -1080,7 +1874,8 @@ fn do_attack(g: &mut Game, pid: Pid, mid: Mid) {
     if killed {
         p.log.push(format!("You kill the {}!", mob_name(&kind)));
         add_inv(p, "coins", mob_coin_drop(&kind));
-        p.intent = Intent::None; p.target = None;
+        p.intent = Intent::None;
+        p.target = None;
         let m = g.mobs.get_mut(&mid).unwrap();
         m.respawn_at = Some(g.tick + 20 * TPS);
     }
@@ -1088,27 +1883,41 @@ fn do_attack(g: &mut Game, pid: Pid, mid: Mid) {
 
 fn process_mob(g: &mut Game, mid: Mid) {
     let (pos, respawning, home, kind) = {
-        let m = match g.mobs.get(&mid) { Some(m) => m, None => return };
+        let m = match g.mobs.get(&mid) {
+            Some(m) => m,
+            None => return,
+        };
         ((m.x, m.y), m.respawn_at, m.home, m.kind.clone())
     };
     if let Some(t) = respawning {
         if g.tick >= t {
             let m = g.mobs.get_mut(&mid).unwrap();
-            m.x = home.0; m.y = home.1; m.hp_cur = m.hp_max; m.respawn_at = None;
+            m.x = home.0;
+            m.y = home.1;
+            m.hp_cur = m.hp_max;
+            m.respawn_at = None;
         }
         return;
     }
     let aggro = mob_aggro_radius(&kind);
-    let target = g.players.values()
+    let target = g
+        .players
+        .values()
         .filter(|p| manhattan((p.x, p.y), pos) <= aggro)
         .min_by_key(|p| manhattan((p.x, p.y), pos))
         .map(|p| (p.id, p.x, p.y));
-    let Some((tpid, tx, ty)) = target else { return; };
+    let Some((tpid, tx, ty)) = target else {
+        return;
+    };
     if chebyshev(pos, (tx, ty)) == 1 {
-        let (matk, mstr) = { let m = g.mobs.get(&mid).unwrap(); (m.attack, m.strength) };
+        let (matk, mstr) = {
+            let m = g.mobs.get(&mid).unwrap();
+            (m.attack, m.strength)
+        };
         let pdef = g.players.get(&tpid).unwrap().skills.defence;
         let dmg = roll_hit(matk, pdef, mstr);
         g.events.push(json!({"k": if dmg == 0 { "miss_player" } else { "hit_player" }, "x": tx, "y": ty, "dmg": dmg}));
+        let spawn = g.player_spawn;
         let p = g.players.get_mut(&tpid).unwrap();
         p.hp_cur = (p.hp_cur - dmg).max(0);
         p.log.push(if dmg == 0 {
@@ -1135,14 +1944,19 @@ fn process_mob(g: &mut Game, mid: Mid) {
         if p.hp_cur == 0 {
             p.log.push("You die! Respawning...".into());
             p.hp_cur = p.skills.hp;
-            p.x = 20 + MAP_WEST_PAD; p.y = 20;
-            p.intent = Intent::None; p.target = None; p.trade_open = false; p.angel_modal_open = false;
+            p.x = spawn.0;
+            p.y = spawn.1;
+            p.intent = Intent::None;
+            p.target = None;
+            p.trade_open = false;
+            p.angel_modal_open = false;
         }
     } else if let Some(mut path) = bfs(g, pos, GoalKind::Adjacent((tx, ty)), 0) {
         if let Some(step) = path.pop_front() {
             if g.walkable(step.0, step.1, 0) {
                 let m = g.mobs.get_mut(&mid).unwrap();
-                m.x = step.0; m.y = step.1;
+                m.x = step.0;
+                m.y = step.1;
             }
         }
     }
@@ -1153,176 +1967,99 @@ fn tick_world(g: &mut Game) {
     let now = g.tick;
     for i in 0..g.objects.len() {
         let new = match &g.objects[i] {
-            Obj::Stump { tier, regrow } if *regrow <= now => Some(Obj::Tree { tier: *tier, hp: tree_def(*tier).hp }),
-            Obj::DepletedRock { tier, regrow } if *regrow <= now => Some(Obj::Rock { tier: *tier, hp: rock_def(*tier).hp }),
-            Obj::Bush { berries, regrow } if *berries < 3 && *regrow <= now =>
-                Some(Obj::Bush { berries: berries + 1, regrow: now + 8 * TPS }),
+            Obj::Stump { tier, regrow } if *regrow <= now => Some(Obj::Tree {
+                tier: *tier,
+                hp: tree_def(*tier).hp,
+            }),
+            Obj::DepletedRock { tier, regrow } if *regrow <= now => Some(Obj::Rock {
+                tier: *tier,
+                hp: rock_def(*tier).hp,
+            }),
+            Obj::Bush { berries, regrow } if *berries < 3 && *regrow <= now => Some(Obj::Bush {
+                berries: berries + 1,
+                regrow: now + 8 * TPS,
+            }),
             _ => None,
         };
-        if let Some(o) = new { g.objects[i] = o; }
+        if let Some(o) = new {
+            g.objects[i] = o;
+        }
     }
     let pids: Vec<_> = g.players.keys().copied().collect();
-    for pid in &pids { process_player(g, *pid); }
+    for pid in &pids {
+        process_player(g, *pid);
+    }
     let mids: Vec<_> = g.mobs.keys().copied().collect();
-    for mid in &mids { process_mob(g, *mid); }
+    for mid in &mids {
+        process_mob(g, *mid);
+    }
     for p in g.players.values_mut() {
         p.regen_ctr += 1;
         if p.regen_ctr as u64 >= 6 * TPS {
             p.regen_ctr = 0;
-            if p.hp_cur < p.skills.hp { p.hp_cur += 1; }
+            if p.hp_cur < p.skills.hp {
+                p.hp_cur += 1;
+            }
         }
     }
-}
-
-fn build_map() -> (i32, i32, Vec<Tile>, Vec<Obj>) {
-    let w: i32 = 74 + MAP_WEST_PAD;
-    let h: i32 = 74;
-    let mut tiles = vec![Tile::Grass; (w * h) as usize];
-    let mut objects = vec![Obj::None; (w * h) as usize];
-    let ix = |lx: i32, y: i32| (y * w + (lx + MAP_WEST_PAD)) as usize;
-    let ax = |x: i32, y: i32| (y * w + x) as usize;
-
-    for x in 0..w {
-        tiles[ax(x, 0)] = Tile::Water;
-        tiles[ax(x, h - 1)] = Tile::Water;
-    }
-    for y in 0..h {
-        tiles[ax(w - 1, y)] = Tile::Water;
-    }
-    // Deep western ocean (peninsula tiles overwritten below).
-    for y in 1..h - 1 {
-        for x in 0..MAP_WEST_PAD {
-            tiles[ax(x, y)] = Tile::Water;
-        }
-    }
-
-    // Distinct regions: starter village, mid-tier camps, and high-tier guarded outskirts (legacy coords).
-    for y in 4..20 { for x in 56..71 { tiles[ix(x, y)] = Tile::Stone; } }
-    for y in 48..70 { for x in 55..71 { tiles[ix(x, y)] = Tile::Stone; } }
-    for y in 42..58 { for x in 4..21 { tiles[ix(x, y)] = Tile::Sand; } }
-    for y in 12..28 { for x in 42..57 { tiles[ix(x, y)] = Tile::Dirt; } }
-    for y in 42..56 { for x in 44..59 { tiles[ix(x, y)] = Tile::Dirt; } }
-    for dy in -1..=1i32 { for dx in -1..=1i32 { tiles[ix(20 + dx, 18 + dy)] = Tile::Dirt; } }
-    for x in 8..66 { tiles[ix(x, 19)] = Tile::Path; }
-    for y in 10..64 { tiles[ix(20, y)] = Tile::Path; }
-    for x in 20..63 { tiles[ix(x, 45)] = Tile::Path; }
-    for y in 19..46 { tiles[ix(49, y)] = Tile::Path; }
-    for y in 9..20 { tiles[ix(62, y)] = Tile::Path; }
-    for y in 45..64 { tiles[ix(63, y)] = Tile::Path; }
-
-    // Original west coast (legacy x = 0): ocean unless the peninsula replaces tiles here.
-    for y in 1..h - 1 {
-        tiles[ax(MAP_WEST_PAD, y)] = Tile::Water;
-    }
-    // Tier-2 club goblin peninsula — dirt into extended western ocean (spawn latitude).
-    for y in 14..=22 {
-        let d = i32::abs(y - 18);
-        let min_x = 2 + d * 2;
-        for x in min_x..=MAP_WEST_PAD {
-            tiles[ax(x, y)] = Tile::Dirt;
-        }
-    }
-
-    let trees = [
-        // Starter pine woods near spawn.
-        (5,5,1),(6,5,1),(7,5,1),(5,6,1),(8,7,1),(15,8,1),(16,9,1),(14,12,1),
-        (10,15,1),(8,20,1),(12,22,1),(15,25,1),(7,28,1),(6,15,1),(11,7,1),
-        // Oak patches at medium distance.
-        (43,13,2),(44,14,2),(45,13,2),(46,15,2),(47,17,2),(50,15,2),(52,18,2),
-        (44,24,2),(46,25,2),(49,26,2),(52,25,2),(54,23,2),
-        (13,45,2),(15,47,2),(17,46,2),(18,49,2),(12,51,2),(16,53,2),
-        // Yew groves in guarded high-tier territory.
-        (60,9,3),(62,8,3),(64,9,3),(66,11,3),(68,12,3),(61,15,3),(65,16,3),(69,17,3),
-        (57,58,3),(59,60,3),(61,59,3),(64,61,3),(66,62,3),(68,64,3),(60,66,3),(63,67,3),
-        // Yew ring fully encircling magic trees + dragons (single-tile gaps at N/S x=35).
-        (28,51,3),(29,51,3),(30,51,3),(31,51,3),(32,51,3),(33,51,3),(34,51,3),(36,51,3),(37,51,3),(38,51,3),(39,51,3),(40,51,3),(41,51,3),(42,51,3),
-        (28,59,3),(29,59,3),(30,59,3),(31,59,3),(32,59,3),(33,59,3),(34,59,3),(36,59,3),(37,59,3),(38,59,3),(39,59,3),(40,59,3),(41,59,3),(42,59,3),
-        (28,52,3),(28,53,3),(28,54,3),(28,55,3),(28,56,3),(28,57,3),(28,58,3),
-        (42,52,3),(42,53,3),(42,54,3),(42,55,3),(42,56,3),(42,57,3),(42,58,3),
-        // Magic trees (tier 4) — staggered grid so corridors stay walkable for mobs.
-        (30,53,4),(32,53,4),(34,53,4),(36,53,4),(38,53,4),(40,53,4),
-        (30,55,4),(32,55,4),(34,55,4),(36,55,4),(38,55,4),(40,55,4),
-        (30,57,4),(32,57,4),(34,57,4),(36,57,4),(38,57,4),(40,57,4),
-    ];
-    for (x, y, tier) in trees {
-        objects[ix(x, y)] = Obj::Tree { tier, hp: tree_def(tier).hp };
-    }
-
-    let rocks = [
-        // Starter copper outcrops.
-        (28,6,1),(29,6,1),(30,7,1),(31,6,1),(29,9,1),(33,8,1),(35,11,1),(32,13,1),
-        // Iron quarries guarded by club goblins.
-        (47,43,2),(49,43,2),(51,44,2),(53,45,2),(55,46,2),(48,48,2),(51,49,2),(54,50,2),
-        (44,18,2),(46,20,2),(49,21,2),(51,19,2),(54,21,2),(55,24,2),
-        // Gold veins deep in ninja territory.
-        (58,5,3),(61,5,3),(64,6,3),(67,7,3),(69,9,3),(57,12,3),(70,15,3),
-        (58,52,3),(61,53,3),(65,54,3),(68,56,3),(57,62,3),(70,63,3),(66,67,3),
-        // Cobalt seams on the western desert (tier 4 — cobalt pickaxe).
-        (8,46,4),(10,46,4),(12,46,4),(9,49,4),(11,49,4),(8,52,4),
-    ];
-    for (x, y, tier) in rocks {
-        objects[ix(x, y)] = Obj::Rock { tier, hp: rock_def(tier).hp };
-    }
-
-    let bushes = [
-        (22,18),(18,22),(24,20),(19,16),(11,11),(13,17),(21,21),(45,45),(52,16),
-        // Dense berry yard east of the dragon grove (west of gold wastes).
-        (43,52),(43,53),(43,54),(44,51),(44,53),(44,54),(44,55),(45,52),(45,53),(45,54),(46,51),(46,52),(46,53),(46,54),(46,55),
-        (47,52),(47,53),(47,54),(48,51),(48,52),(48,53),(48,54),(49,51),(49,52),(49,53),(49,54),(50,51),(50,53),(50,54),
-        (51,52),(51,53),(51,54),(52,52),(52,53),(52,54),(53,51),(53,52),(53,53),(53,54),(54,51),(54,52),(54,53),(54,54),
-        (52,56),(53,56),(54,56),(54,55),(55,52),(55,53),(55,54),(55,55),(56,51),(56,53),(56,54),(57,52),(57,53),(57,54),
-        (58,53),(58,54),(59,51),(59,52),(59,53),(59,54),(60,52),(60,53),(60,55),(61,52),(61,54),(61,56),(62,53),(62,55),(62,57),
-        (63,52),(63,53),(63,54),
-    ];
-    for (x, y) in bushes { objects[ix(x, y)] = Obj::Bush { berries: 3, regrow: 0 }; }
-
-    let boulders = [
-        (27,12),(33,15),(8,18),(17,30),(26,28),
-        (41,16),(41,17),(41,18),(41,20),(41,21),(41,22),
-        (56,41),(56,42),(56,43),(56,44),(56,47),(56,48),
-        (55,8),(55,9),(55,10),(55,11),(55,13),(55,14),
-        (54,57),(54,58),(54,59),(54,61),(54,62),(54,63),
-    ];
-    for (x, y) in boulders { objects[ix(x, y)] = Obj::Boulder; }
-    objects[ix(20, 18)] = Obj::Trader;
-    objects[ix(20, 1)] = Obj::Angel;
-    (w, h, tiles, objects)
 }
 
 fn shop_catalog() -> Vec<Value> {
-    TOOL_DEFS.iter().map(|t| json!({
-        "item": t.item,
-        "name": t.name,
-        "kind": t.kind,
-        "tier": t.tier,
-        "buy": t.buy,
-    })).collect()
+    TOOL_DEFS
+        .iter()
+        .map(|t| {
+            json!({
+                "item": t.item,
+                "name": t.name,
+                "kind": t.kind,
+                "tier": t.tier,
+                "buy": t.buy,
+            })
+        })
+        .collect()
 }
 
 fn sell_catalog() -> Vec<Value> {
-    let mut out: Vec<Value> = TOOL_DEFS.iter().map(|t| json!({
-        "item": t.item,
-        "name": t.name,
-        "tier": t.tier,
-        "sell": t.buy,
-    })).collect();
-    out.extend(TREE_DEFS.iter().map(|r| json!({
-        "item": r.item,
-        "name": r.name,
-        "tier": r.tier,
-        "sell": r.sell,
-        "xp": r.xp,
-    })));
-    out.extend(ROCK_DEFS.iter().map(|r| json!({
-        "item": r.item,
-        "name": r.name,
-        "tier": r.tier,
-        "sell": r.sell,
-        "xp": r.xp,
-    })));
+    let mut out: Vec<Value> = TOOL_DEFS
+        .iter()
+        .map(|t| {
+            json!({
+                "item": t.item,
+                "name": t.name,
+                "tier": t.tier,
+                "sell": t.buy,
+            })
+        })
+        .collect();
+    out.extend(TREE_DEFS.iter().map(|r| {
+        json!({
+            "item": r.item,
+            "name": r.name,
+            "tier": r.tier,
+            "sell": r.sell,
+            "xp": r.xp,
+        })
+    }));
+    out.extend(ROCK_DEFS.iter().map(|r| {
+        json!({
+            "item": r.item,
+            "name": r.name,
+            "tier": r.tier,
+            "sell": r.sell,
+            "xp": r.xp,
+        })
+    }));
     out.push(json!({ "item": "berries", "name": "Berries", "tier": 1, "sell": 1, "xp": 0 }));
     out.push(json!({ "item": "salmon", "name": "Salmon", "tier": 2, "sell": 35, "xp": 42 }));
     out
+}
+
+fn trade_offer_json(p: &Player) -> Vec<Value> {
+    offer_items_from_slots(&p.inv, &p.trade_offer)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(slot, it)| json!({ "slot": slot, "item": it.item, "qty": it.qty, "name": item_name(&it.item) }))
+        .collect()
 }
 
 fn build_state_msg(g: &Game, pid: Pid) -> String {
@@ -1333,11 +2070,37 @@ fn build_state_msg(g: &Game, pid: Pid) -> String {
     let players: Vec<Value> = g.players.values().map(|q| json!({
         "id": q.id, "x": q.x, "y": q.y, "name": q.name, "hp": q.hp_cur, "hp_max": q.skills.hp
     })).collect();
-    let mobs: Vec<Value> = g.mobs.values().filter(|m| m.respawn_at.is_none()).map(|m| json!({
-        "id": m.id, "kind": m.kind, "x": m.x, "y": m.y, "hp": m.hp_cur, "hp_max": m.hp_max
-    })).collect();
+    let mobs: Vec<Value> = g
+        .mobs
+        .values()
+        .filter(|m| m.respawn_at.is_none())
+        .map(|m| {
+            json!({
+                "id": m.id, "kind": m.kind, "x": m.x, "y": m.y, "hp": m.hp_cur, "hp_max": m.hp_max
+            })
+        })
+        .collect();
     let mut chat: Vec<ChatMsg> = g.chat.iter().cloned().collect();
     chat.extend(p.private_chat.iter().cloned());
+    let player_trade = p.trade_partner.and_then(|partner_id| {
+        let other = g.players.get(&partner_id)?;
+        if other.trade_partner != Some(pid) {
+            return None;
+        }
+        Some(json!({
+            "open": true,
+            "partner_id": other.id,
+            "partner_name": other.name,
+            "stage": p.trade_stage,
+            "your_offer_slots": p.trade_offer.clone(),
+            "your_offer": trade_offer_json(p),
+            "their_offer": trade_offer_json(other),
+            "your_accepted": p.trade_accepted,
+            "their_accepted": other.trade_accepted,
+            "your_confirmed": p.trade_confirmed,
+            "their_confirmed": other.trade_confirmed,
+        }))
+    });
     json!({
         "t": "state", "tick": g.tick, "tick_ms": TICK_MS,
         "you": { "id": p.id, "x": p.x, "y": p.y, "hp": p.hp_cur, "skills": p.skills,
@@ -1346,12 +2109,16 @@ fn build_state_msg(g: &Game, pid: Pid) -> String {
                  "angel_modal_open": p.angel_modal_open && near_angel(g, pid) },
         "players": players, "mobs": mobs, "objects": g.objects, "log": p.log,
         "shop": shop_catalog(), "sells": sell_catalog(),
+        "player_trade": player_trade,
         "chat": chat,
         "events": g.events,
     }).to_string()
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<Mutex<Game>>>) -> impl IntoResponse {
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<Mutex<Game>>>,
+) -> impl IntoResponse {
     ws.on_upgrade(move |s| handle_socket(s, state))
 }
 
@@ -1361,9 +2128,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
         Some(Ok(Message::Text(t))) => t,
         _ => return,
     };
-    let v: Value = match serde_json::from_str(&join) { Ok(v) => v, _ => return };
-    if v.get("t").and_then(|x| x.as_str()) != Some("join") { return; }
-    let requested_name = clean_name(v.get("name").and_then(|x| x.as_str()).unwrap_or("Adventurer"));
+    let v: Value = match serde_json::from_str(&join) {
+        Ok(v) => v,
+        _ => return,
+    };
+    if v.get("t").and_then(|x| x.as_str()) != Some("join") {
+        return;
+    }
+    let requested_name = clean_name(
+        v.get("name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("Adventurer"),
+    );
     let uuid = valid_uuid_or_new(v.get("uuid").and_then(|x| x.as_str()));
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let pid = new_pid();
@@ -1371,16 +2147,33 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
         let mut g = state.lock().await;
         let saved = load_player(&g.db, &uuid);
         let mut p = if let Some(saved) = saved {
-            let mut p = Player::new(pid, uuid.clone(), clean_name(&saved.name), saved.x, saved.y, tx.clone());
+            let mut p = Player::new(
+                pid,
+                uuid.clone(),
+                clean_name(&saved.name),
+                saved.x,
+                saved.y,
+                tx.clone(),
+            );
             p.hp_cur = saved.hp_cur.clamp(1, saved.skills.hp);
             p.skills = saved.skills;
             p.inv = saved.inv;
             p
         } else {
-            Player::new(pid, uuid.clone(), requested_name, 20 + MAP_WEST_PAD, 20, tx.clone())
+            Player::new(
+                pid,
+                uuid.clone(),
+                requested_name,
+                g.player_spawn.0,
+                g.player_spawn.1,
+                tx.clone(),
+            )
         };
-        p.log.push("Welcome to Tradscape, /help for commands.".into());
-        let init = json!({ "t": "init", "w": g.w, "h": g.h, "tiles": g.tiles, "you": pid, "uuid": uuid }).to_string();
+        p.log
+            .push("Welcome to Tradscape, /help for commands.".into());
+        let init =
+            json!({ "t": "init", "w": g.w, "h": g.h, "tiles": g.tiles, "you": pid, "uuid": uuid })
+                .to_string();
         let _ = tx.send(init);
         let name = p.name.clone();
         g.players.insert(pid, p);
@@ -1388,12 +2181,17 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
     }
     let send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if sink.send(Message::Text(msg)).await.is_err() { break; }
+            if sink.send(Message::Text(msg)).await.is_err() {
+                break;
+            }
         }
     });
     while let Some(Ok(msg)) = stream.next().await {
         if let Message::Text(text) = msg {
-            let v: Value = match serde_json::from_str(&text) { Ok(v) => v, _ => continue };
+            let v: Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                _ => continue,
+            };
             let mut g = state.lock().await;
             match v.get("t").and_then(|x| x.as_str()).unwrap_or("") {
                 "click" => {
@@ -1405,9 +2203,17 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                     let mid = v.get("mid").and_then(|x| x.as_u64()).unwrap_or(0);
                     attack(&mut g, pid, mid);
                 }
+                "trade_player" => {
+                    let other_pid = v.get("pid").and_then(|x| x.as_u64()).unwrap_or(0);
+                    trade(&mut g, pid, other_pid);
+                }
                 "stop" => {
+                    cancel_player_trade(&mut g, pid, "Trade cancelled.");
                     if let Some(p) = g.players.get_mut(&pid) {
-                        p.intent = Intent::None; p.target = None; p.trade_open = false; p.angel_modal_open = false;
+                        p.intent = Intent::None;
+                        p.target = None;
+                        p.trade_open = false;
+                        p.angel_modal_open = false;
                     }
                 }
                 "eat" => {
@@ -1415,7 +2221,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                     eat(&mut g, pid, s);
                 }
                 "buy" => {
-                    let item = v.get("item").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let item = v
+                        .get("item")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     buy(&mut g, pid, &item);
                 }
                 "sell" => {
@@ -1427,6 +2237,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                         p.trade_open = false;
                     }
                 }
+                "close_player_trade" => {
+                    cancel_player_trade(&mut g, pid, "Trade declined.");
+                }
+                "trade_offer_slot" => {
+                    let s = v.get("slot").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    trade_offer_slot(&mut g, pid, s);
+                }
+                "trade_accept" => {
+                    trade_accept(&mut g, pid);
+                }
+                "trade_confirm" => {
+                    trade_confirm(&mut g, pid);
+                }
                 "angel_confirm" => {
                     angel_sacrifice(&mut g, pid);
                 }
@@ -1434,7 +2257,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                     angel_decline(&mut g, pid);
                 }
                 "chat" => {
-                    let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let text = v
+                        .get("text")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     add_chat(&mut g, pid, &text);
                 }
                 _ => {}
@@ -1449,6 +2276,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
         if let Some(p) = g.players.get(&pid) {
             save_player(&g.db, p);
         }
+        cancel_player_trade(&mut g, pid, "Other player disconnected.");
         g.players.remove(&pid);
         println!("Player {} left", pid);
     }
@@ -1459,9 +2287,8 @@ fn resolve_static_root() -> PathBuf {
     if let Ok(p) = std::env::var("TRADSCAPE_ROOT") {
         return PathBuf::from(p);
     }
-    let has_client = |dir: &PathBuf| {
-        dir.join("index.html").exists() || dir.join("tradscape.html").exists()
-    };
+    let has_client =
+        |dir: &PathBuf| dir.join("index.html").exists() || dir.join("tradscape.html").exists();
     if let Ok(cwd) = std::env::current_dir() {
         if has_client(&cwd) {
             return cwd;
@@ -1508,9 +2335,7 @@ async fn main() {
             "/tradscape.html",
             get(|| async { Redirect::temporary("/") }),
         )
-        .fallback_service(
-            ServeDir::new(static_dir).append_index_html_on_directories(true),
-        )
+        .fallback_service(ServeDir::new(static_dir).append_index_html_on_directories(true))
         .with_state(state);
     let listener = TcpListener::bind("0.0.0.0:8081").await.unwrap();
     println!("Tradscape listening on http://localhost:8081");

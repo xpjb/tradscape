@@ -24,6 +24,58 @@ body {
   padding: 8px;
   font-size: 13px;
 }
+#player-vitals {
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #8b6f47;
+}
+.vital-hp-heading {
+  font-weight: bold;
+  font-size: 15px;
+  color: #ffb3b3;
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+}
+.hp-bar-track {
+  height: 14px;
+  background: #1a120c;
+  border: 1px solid #5c4830;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.hp-bar-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(180deg, #e84a4a 0%, #9c2020 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  transition: width 0.15s ease-out;
+}
+.vital-hp-numbers {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: bold;
+  color: #fff5e8;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+}
+.vital-angel-row {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8e0ff;
+}
+.vital-angel-emoji {
+  font-size: 18px;
+  line-height: 1;
+}
+.vital-angel-bonus {
+  font-weight: normal;
+  font-size: 12px;
+  color: #c9baa3;
+}
 #tabs { display: flex; gap: 4px; margin-bottom: 8px; }
 #tabs button {
   flex: 1;
@@ -50,6 +102,10 @@ body {
   position: relative;
 }
 .inv-slot.has-item { cursor: pointer; }
+.inv-slot.offered {
+  outline: 2px solid #ffe066;
+  box-shadow: inset 0 0 0 2px rgba(255, 224, 102, 0.35);
+}
 .inv-slot img {
   width: 100%; height: 100%;
   object-fit: contain;
@@ -173,6 +229,7 @@ body {
   background: #8b6f47;
 }
 #trade-close,
+#player-trade-close,
 #chat-form button {
   background: #5a4a36;
   color: #e8d9b8;
@@ -197,6 +254,42 @@ body {
 .trade-row .trade-price {
   color: #ffe066;
   white-space: nowrap;
+}
+.player-trade-card {
+  width: min(620px, calc(100vw - 32px));
+}
+.trade-stage,
+.trade-status {
+  color: #d8c6a3;
+  font-size: 12px;
+  margin: 6px 0;
+}
+.player-trade-list {
+  min-height: 140px;
+  background: rgba(26, 20, 16, 0.5);
+  border: 1px solid #8b6f47;
+  padding: 6px;
+}
+.player-trade-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(139, 111, 71, 0.5);
+}
+.player-trade-row img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+.player-trade-row span:nth-child(2) {
+  flex: 1;
+}
+.player-trade-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
 }
 #chat-panel {
   width: 988px;
