@@ -99,6 +99,7 @@ enum Intent {
     Pick,
     Fish,
     Talk,
+    Pickup,
     Attack { mid: Mid },
     Trade { pid: Pid },
 }
@@ -144,6 +145,59 @@ struct InvSlot {
     qty: i32,
 }
 
+#[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct Equipment {
+    helmet: String,
+    chest: String,
+    legs: String,
+    left_hand: String,
+    right_hand: String,
+}
+
+const EQUIP_SLOT_NAMES: [&str; 5] = ["helmet", "chest", "legs", "left_hand", "right_hand"];
+
+impl Equipment {
+    fn get(&self, slot: &str) -> &str {
+        match slot {
+            "helmet" => &self.helmet,
+            "chest" => &self.chest,
+            "legs" => &self.legs,
+            "left_hand" => &self.left_hand,
+            "right_hand" => &self.right_hand,
+            _ => "",
+        }
+    }
+    fn set(&mut self, slot: &str, item: String) {
+        match slot {
+            "helmet" => self.helmet = item,
+            "chest" => self.chest = item,
+            "legs" => self.legs = item,
+            "left_hand" => self.left_hand = item,
+            "right_hand" => self.right_hand = item,
+            _ => {}
+        }
+    }
+}
+
+/// Items in `slot` go to which equipment slot, if any.
+fn item_equip_slot(item: &str) -> Option<&'static str> {
+    if item.ends_with("_axe") || item.ends_with("_pickaxe") || item == "fishing_rod" {
+        Some("right_hand")
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct GroundItem {
+    id: u64,
+    x: i32,
+    y: i32,
+    item: String,
+    qty: i32,
+}
+
 #[derive(Clone, Serialize)]
 struct ChatMsg {
     id: u64,
@@ -169,6 +223,7 @@ struct Player {
     hp_cur: i32,
     skills: Skills,
     inv: Vec<InvSlot>,
+    equipment: Equipment,
     target: Option<(i32, i32)>,
     intent: Intent,
     trade_open: bool,
@@ -203,6 +258,7 @@ impl Player {
             hp_cur: 10,
             skills: Skills::starter(),
             inv,
+            equipment: Equipment::default(),
             target: None,
             intent: Intent::None,
             trade_open: false,
@@ -239,10 +295,42 @@ struct MobSpawn {
     kind: &'static str,
     x: i32,
     y: i32,
+}
+
+#[derive(Clone, Copy)]
+struct MobDef {
+    kind: &'static str,
+    name: &'static str,
+    tier: i32,
     hp: i32,
     attack: i32,
     strength: i32,
     defence: i32,
+    aggro: i32,
+    coin: i32,
+}
+
+const MOB_DEFS: [MobDef; 4] = [
+    MobDef { kind: "goblin",      name: "goblin",      tier: 1, hp: 24,  attack: 8,  strength: 9,   defence: 4,  aggro: 6, coin: 5   },
+    MobDef { kind: "club_goblin", name: "club goblin", tier: 2, hp: 60,  attack: 18, strength: 22,  defence: 12, aggro: 6, coin: 25  },
+    MobDef { kind: "ninja",       name: "ninja",       tier: 3, hp: 140, attack: 45, strength: 50,  defence: 35, aggro: 8, coin: 90  },
+    MobDef { kind: "dragon",      name: "dragon",      tier: 4, hp: 350, attack: 90, strength: 100, defence: 80, aggro: 6, coin: 225 },
+];
+
+fn mob_def(kind: &str) -> MobDef {
+    MOB_DEFS.iter().find(|m| m.kind == kind).copied().unwrap_or(MOB_DEFS[0])
+}
+
+/// Drop tools of mob's tier; each tool has chance `0.05 / 4^tier`.
+fn roll_mob_drops(mob_tier: i32) -> Vec<(&'static str, i32)> {
+    let chance = 0.05_f32 / 4.0_f32.powi(mob_tier);
+    let mut drops = Vec::new();
+    for t in TOOL_DEFS.iter().filter(|t| t.tier == mob_tier) {
+        if rand_f() < chance {
+            drops.push((t.item, 1));
+        }
+    }
+    drops
 }
 
 struct MapDef {
@@ -270,6 +358,8 @@ struct Game {
     chat_seq: u64,
     chat: VecDeque<ChatMsg>,
     events: Vec<Value>,
+    ground: Vec<GroundItem>,
+    next_gid: u64,
 }
 
 impl Game {
@@ -297,23 +387,18 @@ impl Game {
             chat_seq: 0,
             chat: VecDeque::new(),
             events: Vec::new(),
+            ground: Vec::new(),
+            next_gid: 1,
         };
         for mob in mobs {
-            g.spawn_mob(
-                mob.kind,
-                mob.x,
-                mob.y,
-                mob.hp,
-                mob.attack,
-                mob.strength,
-                mob.defence,
-            );
+            g.spawn_mob(mob.kind, mob.x, mob.y);
         }
         g
     }
-    fn spawn_mob(&mut self, kind: &str, x: i32, y: i32, hp: i32, atk: i32, str_: i32, def: i32) {
+    fn spawn_mob(&mut self, kind: &str, x: i32, y: i32) {
         let id = self.next_mid;
         self.next_mid += 1;
+        let d = mob_def(kind);
         self.mobs.insert(
             id,
             Mob {
@@ -321,11 +406,11 @@ impl Game {
                 kind: kind.into(),
                 x,
                 y,
-                hp_cur: hp,
-                hp_max: hp,
-                attack: atk,
-                strength: str_,
-                defence: def,
+                hp_cur: d.hp,
+                hp_max: d.hp,
+                attack: d.attack,
+                strength: d.strength,
+                defence: d.defence,
                 home: (x, y),
                 respawn_at: None,
             },
@@ -346,6 +431,18 @@ impl Game {
     fn set_obj(&mut self, x: i32, y: i32, o: Obj) {
         let i = self.idx(x, y);
         self.objects[i] = o;
+    }
+    fn drop_ground(&mut self, x: i32, y: i32, item: &str, qty: i32) {
+        if qty <= 0 || item.is_empty() {
+            return;
+        }
+        if let Some(gi) = self.ground.iter_mut().find(|g| g.x == x && g.y == y && g.item == item) {
+            gi.qty += qty;
+            return;
+        }
+        let id = self.next_gid;
+        self.next_gid += 1;
+        self.ground.push(GroundItem { id, x, y, item: item.into(), qty });
     }
     fn occupant_pid(&self, x: i32, y: i32) -> Option<Pid> {
         self.players
@@ -388,6 +485,7 @@ struct SavedPlayer {
     hp_cur: i32,
     skills: Skills,
     inv: Vec<InvSlot>,
+    equipment: Equipment,
 }
 
 fn open_db() -> Connection {
@@ -401,6 +499,7 @@ fn open_db() -> Connection {
             hp_cur INTEGER NOT NULL,
             skills_json TEXT NOT NULL,
             inv_json TEXT NOT NULL,
+            equipment_json TEXT NOT NULL DEFAULT '{}',
             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
         );",
     )
@@ -415,6 +514,12 @@ fn open_db() -> Connection {
             params![MAP_WEST_PAD, 73_i32],
         );
         let _ = db.execute_batch("PRAGMA user_version = 1");
+    }
+    if ver < 2 {
+        let _ = db.execute_batch(
+            "ALTER TABLE players ADD COLUMN equipment_json TEXT NOT NULL DEFAULT '{}';
+             PRAGMA user_version = 2;",
+        );
     }
     db
 }
@@ -442,11 +547,13 @@ fn valid_uuid_or_new(raw: Option<&str>) -> String {
 
 fn load_player(db: &Connection, uuid: &str) -> Option<SavedPlayer> {
     db.query_row(
-        "SELECT name, x, y, hp_cur, skills_json, inv_json FROM players WHERE uuid = ?1",
+        "SELECT name, x, y, hp_cur, skills_json, inv_json, equipment_json FROM players WHERE uuid = ?1",
         params![uuid],
         |row| {
             let skills_json: String = row.get(4)?;
             let inv_json: String = row.get(5)?;
+            let equipment_json: String = row.get(6)?;
+            let equipment: Equipment = serde_json::from_str(&equipment_json).unwrap_or_default();
             let mut skills =
                 serde_json::from_str(&skills_json).unwrap_or_else(|_| Skills::starter());
             skills.woodcutting = level_from_xp(skills.woodcutting_xp);
@@ -466,6 +573,7 @@ fn load_player(db: &Connection, uuid: &str) -> Option<SavedPlayer> {
                 hp_cur: row.get(3)?,
                 skills,
                 inv,
+                equipment,
             })
         },
     )
@@ -473,12 +581,45 @@ fn load_player(db: &Connection, uuid: &str) -> Option<SavedPlayer> {
     .unwrap_or(None)
 }
 
+#[derive(Clone)]
+struct PlayerSave {
+    uuid: String,
+    name: String,
+    x: i32,
+    y: i32,
+    hp_cur: i32,
+    skills: Skills,
+    inv: Vec<InvSlot>,
+    equipment: Equipment,
+}
+
+impl From<&Player> for PlayerSave {
+    fn from(p: &Player) -> Self {
+        Self {
+            uuid: p.uuid.clone(),
+            name: p.name.clone(),
+            x: p.x,
+            y: p.y,
+            hp_cur: p.hp_cur,
+            skills: p.skills.clone(),
+            inv: p.inv.clone(),
+            equipment: p.equipment.clone(),
+        }
+    }
+}
+
 fn save_player(db: &Connection, p: &Player) {
-    let skills_json = serde_json::to_string(&p.skills).unwrap_or_else(|_| "{}".into());
-    let inv_json = serde_json::to_string(&p.inv).unwrap_or_else(|_| "[]".into());
+    let rec = PlayerSave::from(p);
+    save_player_record(db, &rec);
+}
+
+fn save_player_record(db: &Connection, rec: &PlayerSave) {
+    let skills_json = serde_json::to_string(&rec.skills).unwrap_or_else(|_| "{}".into());
+    let inv_json = serde_json::to_string(&rec.inv).unwrap_or_else(|_| "[]".into());
+    let equipment_json = serde_json::to_string(&rec.equipment).unwrap_or_else(|_| "{}".into());
     let _ = db.execute(
-        "INSERT INTO players (uuid, name, x, y, hp_cur, skills_json, inv_json, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch())
+        "INSERT INTO players (uuid, name, x, y, hp_cur, skills_json, inv_json, equipment_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, unixepoch())
          ON CONFLICT(uuid) DO UPDATE SET
             name = excluded.name,
             x = excluded.x,
@@ -486,9 +627,25 @@ fn save_player(db: &Connection, p: &Player) {
             hp_cur = excluded.hp_cur,
             skills_json = excluded.skills_json,
             inv_json = excluded.inv_json,
+            equipment_json = excluded.equipment_json,
             updated_at = excluded.updated_at",
-        params![p.uuid, p.name, p.x, p.y, p.hp_cur, skills_json, inv_json],
+        params![
+            &rec.uuid,
+            &rec.name,
+            rec.x,
+            rec.y,
+            rec.hp_cur,
+            &skills_json,
+            &inv_json,
+            &equipment_json
+        ],
     );
+}
+
+fn save_player_without_game_lock(rec: &PlayerSave) {
+    if let Ok(db) = Connection::open(DB_PATH) {
+        save_player_record(&db, rec);
+    }
 }
 
 fn manhattan(a: (i32, i32), b: (i32, i32)) -> i32 {
@@ -969,6 +1126,9 @@ fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
         if rod_ok {
             intent = Intent::Fish;
         }
+    }
+    if matches!(intent, Intent::None) && g.ground.iter().any(|gi| gi.x == x && gi.y == y) {
+        intent = Intent::Pickup;
     }
     let walk_ok = g.walkable(x, y, pid);
     cancel_player_trade(g, pid, "Trade cancelled.");
@@ -1514,28 +1674,11 @@ fn roll_hit(atk: i32, def: i32, str_: i32) -> i32 {
 }
 
 fn mob_name(kind: &str) -> &'static str {
-    match kind {
-        "club_goblin" => "club goblin",
-        "ninja" => "ninja",
-        "dragon" => "dragon",
-        _ => "goblin",
-    }
-}
-
-fn mob_coin_drop(kind: &str) -> i32 {
-    match kind {
-        "club_goblin" => 25,
-        "ninja" => 90,
-        "dragon" => 225,
-        _ => 5,
-    }
+    mob_def(kind).name
 }
 
 fn mob_aggro_radius(kind: &str) -> i32 {
-    match kind {
-        "ninja" => 8,
-        _ => 6,
-    }
+    mob_def(kind).aggro
 }
 
 fn process_player(g: &mut Game, pid: Pid) {
@@ -1571,7 +1714,7 @@ fn process_player(g: &mut Game, pid: Pid) {
     let Some(t) = target else {
         return;
     };
-    let needs_adj = !matches!(intent, Intent::None);
+    let needs_adj = !matches!(intent, Intent::None | Intent::Pickup);
     let at_goal = if needs_adj {
         chebyshev(pos, t) == 1
     } else {
@@ -1583,6 +1726,7 @@ fn process_player(g: &mut Game, pid: Pid) {
             Intent::Mine => do_mine(g, pid, t),
             Intent::Pick => do_pick(g, pid, t),
             Intent::Fish => do_fish(g, pid, t),
+            Intent::Pickup => do_pickup(g, pid, t),
             Intent::Attack { mid } => do_attack(g, pid, mid),
             Intent::Trade { pid: other_pid } => {
                 request_player_trade(g, pid, other_pid);
@@ -1838,6 +1982,126 @@ fn do_pick(g: &mut Game, pid: Pid, t: (i32, i32)) {
         p.target = None;
     }
 }
+fn do_pickup(g: &mut Game, pid: Pid, t: (i32, i32)) {
+    let mut taken: Vec<GroundItem> = Vec::new();
+    let mut i = 0;
+    while i < g.ground.len() {
+        if g.ground[i].x == t.0 && g.ground[i].y == t.1 {
+            taken.push(g.ground.remove(i));
+        } else {
+            i += 1;
+        }
+    }
+    {
+        let p = g.players.get_mut(&pid).unwrap();
+        p.intent = Intent::None;
+        p.target = None;
+    }
+    if taken.is_empty() {
+        return;
+    }
+    let mut full = false;
+    for gi in taken {
+        let added = if full {
+            false
+        } else {
+            let p = g.players.get_mut(&pid).unwrap();
+            add_inv(p, &gi.item, gi.qty)
+        };
+        if !added {
+            full = true;
+            g.ground.push(gi);
+            continue;
+        }
+        let p = g.players.get_mut(&pid).unwrap();
+        p.log.push(format!("You pick up {}.", item_name(&gi.item)));
+    }
+    if full {
+        let p = g.players.get_mut(&pid).unwrap();
+        p.log.push("Inventory full!".into());
+    }
+}
+
+fn drop_one(g: &mut Game, pid: Pid, slot: usize) {
+    let Some(p) = g.players.get_mut(&pid) else {
+        return;
+    };
+    if slot >= INV_SIZE {
+        return;
+    }
+    let s = &mut p.inv[slot];
+    if s.item.is_empty() || s.qty <= 0 {
+        return;
+    }
+    let item = s.item.clone();
+    s.qty -= 1;
+    if s.qty == 0 {
+        *s = InvSlot::default();
+    }
+    let (x, y) = (p.x, p.y);
+    p.log.push(format!("You drop {}.", item_name(&item)));
+    g.drop_ground(x, y, &item, 1);
+}
+
+fn equip_from_inv(g: &mut Game, pid: Pid, slot: usize) {
+    let Some(p) = g.players.get_mut(&pid) else {
+        return;
+    };
+    if slot >= INV_SIZE {
+        return;
+    }
+    let item = p.inv[slot].item.clone();
+    if item.is_empty() {
+        return;
+    }
+    let Some(eq_slot) = item_equip_slot(&item) else {
+        p.log.push(format!("{} cannot be equipped.", item_name(&item)));
+        return;
+    };
+    let qty = p.inv[slot].qty;
+    let prev = p.equipment.get(eq_slot).to_string();
+    if qty > 1 {
+        p.inv[slot].qty -= 1;
+    } else {
+        p.inv[slot] = InvSlot::default();
+    }
+    p.equipment.set(eq_slot, item.clone());
+    if !prev.is_empty() {
+        if !add_inv(p, &prev, 1) {
+            // No room — drop it on the floor instead of losing it.
+            let (x, y) = (p.x, p.y);
+            g.drop_ground(x, y, &prev, 1);
+            let p = g.players.get_mut(&pid).unwrap();
+            p.log.push(format!("{} falls to the ground.", item_name(&prev)));
+        }
+    }
+    let p = g.players.get_mut(&pid).unwrap();
+    p.log.push(format!("You equip {}.", item_name(&item)));
+}
+
+fn unequip_slot(g: &mut Game, pid: Pid, eq_slot: &str) {
+    if !EQUIP_SLOT_NAMES.contains(&eq_slot) {
+        return;
+    }
+    let Some(p) = g.players.get_mut(&pid) else {
+        return;
+    };
+    let item = p.equipment.get(eq_slot).to_string();
+    if item.is_empty() {
+        return;
+    }
+    p.equipment.set(eq_slot, String::new());
+    if !add_inv(p, &item, 1) {
+        // No room — drop on floor.
+        let (x, y) = (p.x, p.y);
+        g.drop_ground(x, y, &item, 1);
+        let p = g.players.get_mut(&pid).unwrap();
+        p.log.push(format!("{} falls to the ground.", item_name(&item)));
+        return;
+    }
+    p.log.push(format!("You unequip {}.", item_name(&item)));
+}
+
 fn do_attack(g: &mut Game, pid: Pid, mid: Mid) {
     let (atk, str_) = {
         let p = g.players.get(&pid).unwrap();
@@ -1873,11 +2137,22 @@ fn do_attack(g: &mut Game, pid: Pid, mid: Mid) {
     log_level_up(&mut p.log, "Strength", old_strength, p.skills.strength);
     if killed {
         p.log.push(format!("You kill the {}!", mob_name(&kind)));
-        add_inv(p, "coins", mob_coin_drop(&kind));
         p.intent = Intent::None;
         p.target = None;
-        let m = g.mobs.get_mut(&mid).unwrap();
-        m.respawn_at = Some(g.tick + 20 * TPS);
+        let def = mob_def(&kind);
+        let drops = roll_mob_drops(def.tier);
+        let (mx, my) = {
+            let m = g.mobs.get_mut(&mid).unwrap();
+            m.respawn_at = Some(g.tick + 20 * TPS);
+            (m.x, m.y)
+        };
+        g.drop_ground(mx, my, "coins", def.coin);
+        for (item, qty) in drops {
+            g.drop_ground(mx, my, item, qty);
+            if let Some(p) = g.players.get_mut(&pid) {
+                p.log.push(format!("The {} drops {}!", mob_name(&kind), item_name(item)));
+            }
+        }
     }
 }
 
@@ -2104,10 +2379,11 @@ fn build_state_msg(g: &Game, pid: Pid) -> String {
     json!({
         "t": "state", "tick": g.tick, "tick_ms": TICK_MS,
         "you": { "id": p.id, "x": p.x, "y": p.y, "hp": p.hp_cur, "skills": p.skills,
-                 "inv": p.inv, "axe_tier": axe_tier, "pickaxe_tier": pickaxe_tier, "rod_tier": rod_tier,
+                 "inv": p.inv, "equipment": p.equipment,
+                 "axe_tier": axe_tier, "pickaxe_tier": pickaxe_tier, "rod_tier": rod_tier,
                  "intent": p.intent, "target": p.target, "trade_open": p.trade_open && near_trader(g, pid),
                  "angel_modal_open": p.angel_modal_open && near_angel(g, pid) },
-        "players": players, "mobs": mobs, "objects": g.objects, "log": p.log,
+        "players": players, "mobs": mobs, "objects": g.objects, "ground": g.ground, "log": p.log,
         "shop": shop_catalog(), "sells": sell_catalog(),
         "player_trade": player_trade,
         "chat": chat,
@@ -2158,6 +2434,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
             p.hp_cur = saved.hp_cur.clamp(1, saved.skills.hp);
             p.skills = saved.skills;
             p.inv = saved.inv;
+            p.equipment = saved.equipment;
             p
         } else {
             Player::new(
@@ -2192,93 +2469,125 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                 Ok(v) => v,
                 _ => continue,
             };
-            let mut g = state.lock().await;
-            match v.get("t").and_then(|x| x.as_str()).unwrap_or("") {
-                "click" => {
-                    let x = v.get("x").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
-                    let y = v.get("y").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
-                    click(&mut g, pid, x, y);
+            let save = {
+                let mut g = state.lock().await;
+                let mut push_state = false;
+                match v.get("t").and_then(|x| x.as_str()).unwrap_or("") {
+                    "click" => {
+                        let x = v.get("x").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
+                        let y = v.get("y").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
+                        click(&mut g, pid, x, y);
+                    }
+                    "attack" => {
+                        let mid = v.get("mid").and_then(|x| x.as_u64()).unwrap_or(0);
+                        attack(&mut g, pid, mid);
+                    }
+                    "trade_player" => {
+                        let other_pid = v.get("pid").and_then(|x| x.as_u64()).unwrap_or(0);
+                        trade(&mut g, pid, other_pid);
+                    }
+                    "stop" => {
+                        cancel_player_trade(&mut g, pid, "Trade cancelled.");
+                        if let Some(p) = g.players.get_mut(&pid) {
+                            p.intent = Intent::None;
+                            p.target = None;
+                            p.trade_open = false;
+                            p.angel_modal_open = false;
+                        }
+                    }
+                    "eat" => {
+                        let s = v.get("slot").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                        eat(&mut g, pid, s);
+                        push_state = true;
+                    }
+                    "drop" => {
+                        let s = v.get("slot").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                        drop_one(&mut g, pid, s);
+                        push_state = true;
+                    }
+                    "equip" => {
+                        let s = v.get("slot").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                        equip_from_inv(&mut g, pid, s);
+                        push_state = true;
+                    }
+                    "unequip" => {
+                        let slot = v.get("slot").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                        unequip_slot(&mut g, pid, &slot);
+                        push_state = true;
+                    }
+                    "buy" => {
+                        let item = v
+                            .get("item")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        buy(&mut g, pid, &item);
+                        push_state = true;
+                    }
+                    "sell" => {
+                        let s = v.get("slot").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                        sell(&mut g, pid, s);
+                        push_state = true;
+                    }
+                    "close_trade" => {
+                        if let Some(p) = g.players.get_mut(&pid) {
+                            p.trade_open = false;
+                        }
+                    }
+                    "close_player_trade" => {
+                        cancel_player_trade(&mut g, pid, "Trade declined.");
+                    }
+                    "trade_offer_slot" => {
+                        let s = v.get("slot").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                        trade_offer_slot(&mut g, pid, s);
+                    }
+                    "trade_accept" => {
+                        trade_accept(&mut g, pid);
+                    }
+                    "trade_confirm" => {
+                        trade_confirm(&mut g, pid);
+                    }
+                    "angel_confirm" => {
+                        angel_sacrifice(&mut g, pid);
+                    }
+                    "angel_decline" => {
+                        angel_decline(&mut g, pid);
+                    }
+                    "chat" => {
+                        let text = v
+                            .get("text")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        add_chat(&mut g, pid, &text);
+                    }
+                    _ => {}
                 }
-                "attack" => {
-                    let mid = v.get("mid").and_then(|x| x.as_u64()).unwrap_or(0);
-                    attack(&mut g, pid, mid);
-                }
-                "trade_player" => {
-                    let other_pid = v.get("pid").and_then(|x| x.as_u64()).unwrap_or(0);
-                    trade(&mut g, pid, other_pid);
-                }
-                "stop" => {
-                    cancel_player_trade(&mut g, pid, "Trade cancelled.");
+                if push_state && g.players.contains_key(&pid) {
+                    let msg = build_state_msg(&g, pid);
                     if let Some(p) = g.players.get_mut(&pid) {
-                        p.intent = Intent::None;
-                        p.target = None;
-                        p.trade_open = false;
-                        p.angel_modal_open = false;
+                        let _ = p.tx.send(msg);
+                        p.log.clear();
+                        p.private_chat.clear();
                     }
                 }
-                "eat" => {
-                    let s = v.get("slot").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    eat(&mut g, pid, s);
-                }
-                "buy" => {
-                    let item = v
-                        .get("item")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    buy(&mut g, pid, &item);
-                }
-                "sell" => {
-                    let s = v.get("slot").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    sell(&mut g, pid, s);
-                }
-                "close_trade" => {
-                    if let Some(p) = g.players.get_mut(&pid) {
-                        p.trade_open = false;
-                    }
-                }
-                "close_player_trade" => {
-                    cancel_player_trade(&mut g, pid, "Trade declined.");
-                }
-                "trade_offer_slot" => {
-                    let s = v.get("slot").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    trade_offer_slot(&mut g, pid, s);
-                }
-                "trade_accept" => {
-                    trade_accept(&mut g, pid);
-                }
-                "trade_confirm" => {
-                    trade_confirm(&mut g, pid);
-                }
-                "angel_confirm" => {
-                    angel_sacrifice(&mut g, pid);
-                }
-                "angel_decline" => {
-                    angel_decline(&mut g, pid);
-                }
-                "chat" => {
-                    let text = v
-                        .get("text")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    add_chat(&mut g, pid, &text);
-                }
-                _ => {}
-            }
-            if let Some(p) = g.players.get(&pid) {
-                save_player(&g.db, p);
+                g.players.get(&pid).map(PlayerSave::from)
+            };
+            if let Some(save) = save {
+                save_player_without_game_lock(&save);
             }
         }
     }
-    {
+    let save = {
         let mut g = state.lock().await;
-        if let Some(p) = g.players.get(&pid) {
-            save_player(&g.db, p);
-        }
+        let save = g.players.get(&pid).map(PlayerSave::from);
         cancel_player_trade(&mut g, pid, "Other player disconnected.");
         g.players.remove(&pid);
         println!("Player {} left", pid);
+        save
+    };
+    if let Some(save) = save {
+        save_player_without_game_lock(&save);
     }
     send_task.abort();
 }

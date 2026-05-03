@@ -9,6 +9,8 @@ body {
   align-items: center;
   min-height: 100vh;
   padding: 12px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 #game { display: flex; gap: 8px; }
 #world {
@@ -110,6 +112,7 @@ body {
   width: 100%; height: 100%;
   object-fit: contain;
   pointer-events: none;
+  -webkit-user-drag: none;
 }
 .inv-slot .label {
   position: absolute;
@@ -131,6 +134,33 @@ body {
   font-weight: bold;
 }
 #equipped { font-size: 12px; margin-bottom: 4px; }
+#equip-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.equip-slot { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.equip-slot-label { font-size: 11px; color: #c9baa3; }
+.equip-slot-box {
+  width: 56px;
+  height: 56px;
+  background: #2a2018;
+  border: 1px solid #8b6f47;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.equip-slot-box.has-item { cursor: pointer; }
+.equip-slot-box.has-item:hover { outline: 1px solid #ffe066; }
+.equip-slot-box img {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+.equip-slot-empty { color: #5c4830; font-size: 22px; }
 .hint { color: #b8a98a; font-size: 11px; margin-top: 4px; line-height: 1.3; }
 #skills-list div { padding: 2px 0; border-bottom: 1px solid #5a4a36; }
 .window h3 {
@@ -247,6 +277,7 @@ body {
   height: 24px;
   object-fit: contain;
   image-rendering: pixelated;
+  -webkit-user-drag: none;
 }
 .trade-row .trade-name {
   flex: 1;
@@ -282,6 +313,7 @@ body {
   height: 24px;
   object-fit: contain;
   image-rendering: pixelated;
+  -webkit-user-drag: none;
 }
 .player-trade-row span:nth-child(2) {
   flex: 1;
@@ -297,6 +329,8 @@ body {
   background: #1a1410;
   border: 2px solid #8b6f47;
   padding: 4px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 #chat-log {
   height: 150px;

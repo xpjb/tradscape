@@ -114,6 +114,30 @@ function itemIcon(item) {
   return ITEM_IMG[item] || `items/${item}.png`;
 }
 
+function syncChildren(parent, rows, keyFn, createFn, updateFn) {
+  if (!parent._keyedChildren) {
+    parent.replaceChildren();
+    parent._keyedChildren = new Map();
+  }
+
+  const existing = parent._keyedChildren;
+  const next = new Map();
+  rows.forEach((row, idx) => {
+    const key = keyFn(row, idx);
+    const el = existing.get(key) || createFn(row, idx);
+    updateFn(el, row, idx);
+    next.set(key, el);
+    if (parent.children[idx] !== el) {
+      parent.insertBefore(el, parent.children[idx] || null);
+    }
+  });
+
+  for (const [key, el] of existing) {
+    if (!next.has(key)) el.remove();
+  }
+  parent._keyedChildren = next;
+}
+
 function objectArtKey(o) {
   if (o.kind === 'bush' && o.berries === 0) return 'bush_empty';
   if (o.kind === 'tree') {
@@ -299,9 +323,41 @@ function render() {
     const [tx, ty] = state.you.target;
     const [yx, yy] = entPos('p', state.you.id, state.you.x, state.you.y);
     const intent = (state.you.intent && state.you.intent.k) || 'none';
-    const path = predictPath([state.you.x, state.you.y], [tx, ty], intent !== 'none');
+    const needsAdj = intent !== 'none' && intent !== 'pickup';
+    const path = predictPath([state.you.x, state.you.y], [tx, ty], needsAdj);
     drawPath(yx, yy, path, cx, cy, now);
     drawTarget(tx, ty, cx, cy, now);
+  }
+
+  // ground items
+  if (state.ground) {
+    for (const gi of state.ground) {
+      const vx = gi.x - cx, vy = gi.y - cy;
+      if (vx < -1 || vy < -1 || vx > VIEW_W || vy > VIEW_H) continue;
+      const px = vx * TILE, py = vy * TILE;
+      const im = img(itemIcon(gi.item));
+      const sz = Math.floor(TILE * 0.55);
+      const inset = Math.floor((TILE - sz) / 2);
+      if (im && im.complete && im.naturalWidth > 0 && !im.failed) {
+        ctx.drawImage(im, px + inset, py + inset, sz, sz);
+      } else {
+        ctx.fillStyle = 'rgba(255, 224, 102, 0.85)';
+        ctx.beginPath();
+        ctx.arc(px + TILE / 2, py + TILE / 2, sz / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (gi.qty > 1) {
+        ctx.fillStyle = '#ffe066';
+        ctx.font = 'bold 11px monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 3;
+        const txt = gi.qty > 9999 ? Math.floor(gi.qty / 1000) + 'k' : String(gi.qty);
+        ctx.strokeText(txt, px + 2, py + 2);
+        ctx.fillText(txt, px + 2, py + 2);
+      }
+    }
   }
 
   // mobs
@@ -655,53 +711,24 @@ function updatePanel(s) {
   const hpCur = s.you.hp;
   const hpMax = sk.hp;
   const grid = document.getElementById('inv-grid');
-  grid.innerHTML = '';
-  for (let i = 0; i < 28; i++) {
-    const slot = document.createElement('div');
-    slot.className = 'inv-slot';
-    const it = s.you.inv[i];
-    if (it && it.item) {
-      slot.classList.add('has-item');
-      const im = document.createElement('img');
-      const src = ITEM_IMG[it.item] || `items/${it.item}.png`;
-      im.src = `assets/${src}`;
-      im.onerror = () => { im.style.display = 'none'; };
-      slot.appendChild(im);
-      const lbl = document.createElement('span');
-      lbl.className = 'label';
-      lbl.textContent = itemName(it.item);
-      slot.appendChild(lbl);
-      if (it.qty > 1) {
-        const q = document.createElement('span');
-        q.className = 'qty';
-        q.textContent = it.qty > 9999 ? Math.floor(it.qty/1000) + 'k' : it.qty;
-        slot.appendChild(q);
-      }
-      slot.title = `${itemName(it.item)} x${it.qty}`;
-      slot.onclick = () => {
-        if (s.player_trade && s.player_trade.open) {
-          ws.send(JSON.stringify({ t: 'trade_offer_slot', slot: i }));
-          return;
-        }
-        if (it.item !== 'berries' && it.item !== 'salmon') return;
-        if (hpCur >= hpMax) return;
-        ws.send(JSON.stringify({ t: 'eat', slot: i }));
-      };
-      slot.oncontextmenu = (e) => {
-        e.preventDefault();
-        if (s.player_trade && s.player_trade.open) {
-          ws.send(JSON.stringify({ t: 'trade_offer_slot', slot: i }));
-          return;
-        }
-        ws.send(JSON.stringify({ t: 'sell', slot: i }));
-      };
-      if (s.player_trade && (s.player_trade.your_offer_slots || []).includes(i)) {
-        slot.classList.add('offered');
-      }
-    }
-    grid.appendChild(slot);
-  }
+  const offerSlots = s.player_trade?.your_offer_slots || [];
+  const invRows = Array.from({ length: 28 }, (_, slot) => ({
+    slot,
+    item: s.you.inv[slot],
+    offered: offerSlots.includes(slot),
+    tradeOpen: !!(s.player_trade && s.player_trade.open),
+    hpCur,
+    hpMax,
+  }));
+  syncChildren(
+    grid,
+    invRows,
+    row => `slot:${row.slot}`,
+    () => createInvSlot(),
+    updateInvSlot,
+  );
   document.getElementById('eq-list').textContent = `axe T${s.you.axe_tier || 0}, pickaxe T${s.you.pickaxe_tier || 0}, rod T${s.you.rod_tier || 0}`;
+  renderEquipment(s.you.equipment || {});
   renderTrade(s);
   renderPlayerTrade(s);
   renderAngelModal(s);
@@ -727,6 +754,129 @@ function updatePanel(s) {
   appendSkillRow(skillsEl, 'HP', sk.hp, sk.hp_xp);
 }
 
+function createInvSlot() {
+  const slot = document.createElement('div');
+  slot.className = 'inv-slot';
+  const im = document.createElement('img');
+  im.onerror = () => { im.style.display = 'none'; };
+  const lbl = document.createElement('span');
+  lbl.className = 'label';
+  const qty = document.createElement('span');
+  qty.className = 'qty';
+  slot.append(im, lbl, qty);
+  slot._img = im;
+  slot._label = lbl;
+  slot._qty = qty;
+  return slot;
+}
+
+function updateInvSlot(slot, row) {
+  const it = row.item;
+  slot.className = 'inv-slot';
+  slot.onclick = null;
+  slot.oncontextmenu = (e) => e.preventDefault();
+  slot.title = '';
+  slot._img.style.display = 'none';
+  slot._label.style.display = 'none';
+  slot._qty.style.display = 'none';
+
+  if (!it || !it.item) return;
+
+  slot.classList.add('has-item');
+  slot.classList.toggle('offered', row.offered);
+  slot._img.src = `assets/${itemIcon(it.item)}`;
+  slot._img.style.display = '';
+  slot._label.textContent = itemName(it.item);
+  slot._label.style.display = '';
+  slot._qty.textContent = it.qty > 9999 ? Math.floor(it.qty / 1000) + 'k' : it.qty;
+  slot._qty.style.display = it.qty > 1 ? '' : 'none';
+  slot.title = `${itemName(it.item)} x${it.qty}`;
+  slot.onclick = (e) => {
+    if (e.shiftKey) {
+      ws.send(JSON.stringify({ t: 'drop', slot: row.slot }));
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      ws.send(JSON.stringify({ t: 'equip', slot: row.slot }));
+      return;
+    }
+    if (row.tradeOpen) {
+      ws.send(JSON.stringify({ t: 'trade_offer_slot', slot: row.slot }));
+      return;
+    }
+    if (it.item !== 'berries' && it.item !== 'salmon') return;
+    if (row.hpCur >= row.hpMax) return;
+    ws.send(JSON.stringify({ t: 'eat', slot: row.slot }));
+  };
+  slot.oncontextmenu = (e) => {
+    e.preventDefault();
+    if (row.tradeOpen) {
+      ws.send(JSON.stringify({ t: 'trade_offer_slot', slot: row.slot }));
+      return;
+    }
+    ws.send(JSON.stringify({ t: 'sell', slot: row.slot }));
+  };
+}
+
+const EQUIP_SLOTS = [
+  { key: 'helmet',     label: 'Helmet' },
+  { key: 'chest',      label: 'Chest' },
+  { key: 'legs',       label: 'Legs' },
+  { key: 'left_hand',  label: 'Left hand' },
+  { key: 'right_hand', label: 'Right hand' },
+];
+
+function renderEquipment(eq) {
+  const grid = document.getElementById('equip-grid');
+  if (!grid) return;
+  syncChildren(
+    grid,
+    EQUIP_SLOTS.map(s => ({ key: s.key, label: s.label, item: eq[s.key] || '' })),
+    row => row.key,
+    () => createEquipSlot(),
+    updateEquipSlot,
+  );
+}
+
+function createEquipSlot() {
+  const wrap = document.createElement('div');
+  wrap.className = 'equip-slot';
+  const lbl = document.createElement('div');
+  lbl.className = 'equip-slot-label';
+  const box = document.createElement('div');
+  box.className = 'equip-slot-box';
+  const im = document.createElement('img');
+  im.onerror = () => { im.style.display = 'none'; };
+  const empty = document.createElement('span');
+  empty.className = 'equip-slot-empty';
+  box.append(im, empty);
+  wrap.append(lbl, box);
+  wrap._img = im;
+  wrap._label = lbl;
+  wrap._box = box;
+  wrap._empty = empty;
+  return wrap;
+}
+
+function updateEquipSlot(el, row) {
+  el._label.textContent = row.label;
+  el.title = '';
+  el._box.onclick = null;
+  if (row.item) {
+    el._img.src = `assets/${itemIcon(row.item)}`;
+    el._img.style.display = '';
+    el._empty.style.display = 'none';
+    el.title = `${itemName(row.item)} — click to unequip`;
+    el._box.classList.add('has-item');
+    el._box.onclick = () => ws.send(JSON.stringify({ t: 'unequip', slot: row.key }));
+  } else {
+    el._img.style.display = 'none';
+    el._empty.style.display = '';
+    el._empty.textContent = '—';
+    el._box.classList.remove('has-item');
+  }
+}
+
 function renderAngelModal(s) {
   const win = document.getElementById('angel-window');
   if (!win) return;
@@ -741,38 +891,44 @@ function renderTrade(s) {
 
   win.classList.toggle('hidden', !s.you.trade_open);
 
-  buyList.innerHTML = '';
-  for (const row of s.shop || []) {
-    buyList.appendChild(tradeButton({
+  syncChildren(
+    buyList,
+    s.shop || [],
+    row => row.item,
+    () => createTradeButton(),
+    (el, row) => updateTradeButton(el, {
       item: row.item,
       name: row.name,
       detail: `T${row.tier} ${row.buy}gp`,
       onClick: () => ws.send(JSON.stringify({ t: 'buy', item: row.item })),
-    }));
-  }
+    }),
+  );
 
-  sellList.innerHTML = '';
-  let anyItem = false;
-  for (let i = 0; i < s.you.inv.length; i++) {
-    const it = s.you.inv[i];
-    if (!it || !it.item) continue;
-    anyItem = true;
-    const sale = (s.sells || []).find(x => x.item === it.item);
-    const canSell = it.item !== 'coins' && sale;
-    sellList.appendChild(tradeButton({
-      item: it.item,
-      name: `${itemName(it.item)} x${it.qty}`,
-      detail: canSell ? `${sale.sell * it.qty}gp` : 'not for sale',
-      onClick: () => ws.send(JSON.stringify({ t: 'sell', slot: i })),
-      disabled: !canSell,
-    }));
-  }
-  if (!anyItem) {
-    const empty = document.createElement('div');
-    empty.className = 'hint';
-    empty.textContent = 'Your inventory is empty.';
-    sellList.appendChild(empty);
-  }
+  const sells = s.sells || [];
+  const sellRows = s.you.inv
+    .map((it, slot) => ({ it, slot }))
+    .filter(row => row.it && row.it.item)
+    .map(row => ({ ...row, sale: sells.find(x => x.item === row.it.item) }));
+  syncChildren(
+    sellList,
+    sellRows.length ? sellRows : [{ empty: true }],
+    row => row.empty ? 'empty' : `slot:${row.slot}`,
+    row => row.empty ? createHint('Your inventory is empty.') : createTradeButton(),
+    (el, row) => {
+      if (row.empty) {
+        el.textContent = 'Your inventory is empty.';
+        return;
+      }
+      const canSell = row.it.item !== 'coins' && row.sale;
+      updateTradeButton(el, {
+        item: row.it.item,
+        name: `${itemName(row.it.item)} x${row.it.qty}`,
+        detail: canSell ? `${row.sale.sell * row.it.qty}gp` : 'not for sale',
+        onClick: () => ws.send(JSON.stringify({ t: 'sell', slot: row.slot })),
+        disabled: !canSell,
+      });
+    },
+  );
 }
 
 function renderPlayerTrade(s) {
@@ -829,21 +985,42 @@ function renderTradeOfferList(el, items) {
   }
 }
 
-function tradeButton({ item, name, detail, onClick, disabled = false }) {
+function createHint(text) {
+  const el = document.createElement('div');
+  el.className = 'hint';
+  el.textContent = text;
+  return el;
+}
+
+function createTradeButton() {
   const el = document.createElement('button');
   el.className = 'trade-row';
-  el.disabled = disabled;
   const im = document.createElement('img');
-  im.src = `assets/${itemIcon(item)}`;
   im.onerror = () => { im.style.display = 'none'; };
   const label = document.createElement('span');
   label.className = 'trade-name';
-  label.textContent = name;
   const price = document.createElement('span');
   price.className = 'trade-price';
-  price.textContent = detail;
   el.append(im, label, price);
+  el._img = im;
+  el._label = label;
+  el._price = price;
+  return el;
+}
+
+function updateTradeButton(el, { item, name, detail, onClick, disabled = false }) {
+  el.className = 'trade-row';
+  el.disabled = disabled;
+  el._img.src = `assets/${itemIcon(item)}`;
+  el._img.style.display = '';
+  el._label.textContent = name;
+  el._price.textContent = detail;
   el.onclick = onClick;
+}
+
+function tradeButton(opts) {
+  const el = createTradeButton();
+  updateTradeButton(el, opts);
   return el;
 }
 

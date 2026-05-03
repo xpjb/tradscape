@@ -23,10 +23,19 @@ struct MapMob {
     kind: String,
     x: i32,
     y: i32,
-    hp: i32,
-    attack: i32,
-    strength: i32,
-    defence: i32,
+    // Stats are intentionally ignored — server now sources mob stats from MOB_DEFS.
+    #[serde(default)]
+    #[allow(dead_code)]
+    hp: Option<i32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    attack: Option<i32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    strength: Option<i32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    defence: Option<i32>,
 }
 
 fn main() {
@@ -95,9 +104,6 @@ fn validate_map(map: &MapJson) {
         ) {
             panic!("unknown mob kind {:?} at mobs[{}]", mob.kind, i);
         }
-        if mob.hp <= 0 || mob.attack < 0 || mob.strength < 0 || mob.defence < 0 {
-            panic!("invalid stats for mob {:?} at mobs[{}]", mob.kind, i);
-        }
         validate_open_cell(map, mob.x, mob.y, &format!("mobs[{}]", i));
     }
 }
@@ -155,8 +161,8 @@ fn generate_map_rs(map: &MapJson) -> String {
     out.push_str("        mobs: vec![\n");
     for mob in &map.mobs {
         out.push_str(&format!(
-            "            MobSpawn {{ kind: {:?}, x: {}, y: {}, hp: {}, attack: {}, strength: {}, defence: {} }},\n",
-            mob.kind, mob.x, mob.y, mob.hp, mob.attack, mob.strength, mob.defence
+            "            MobSpawn {{ kind: {:?}, x: {}, y: {} }},\n",
+            mob.kind, mob.x, mob.y
         ));
     }
     out.push_str("        ],\n");

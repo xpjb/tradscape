@@ -25,12 +25,17 @@
     </div>
     <div id="tabs">
       <button data-tab="inv" class="active">Inv</button>
+      <button data-tab="equip">Equip</button>
       <button data-tab="skills">Skills</button>
     </div>
     <div id="tab-inv" class="tab-content">
       <div id="inv-grid"></div>
-      <div id="equipped">Equipped: <span id="eq-list">none</span></div>
-      <div class="hint">Left-click berries to eat. Tools are inventory items. Buy your first tools from the trader.</div>
+      <div id="equipped">Best tools: <span id="eq-list">none</span></div>
+      <div class="hint">Left-click berries to eat. Shift+click to drop one. Ctrl+click to equip. Right-click to sell when at trader.</div>
+    </div>
+    <div id="tab-equip" class="tab-content hidden">
+      <div id="equip-grid"></div>
+      <div class="hint">Click an equipped slot to unequip. Ctrl+click an inventory item to equip it.</div>
     </div>
     <div id="tab-skills" class="tab-content hidden">
       <div id="skills-list"></div>
