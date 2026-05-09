@@ -187,7 +187,11 @@ fn item_equip_slot(item: &str) -> Option<&'static str> {
     if let Some(a) = ARMOR_DEFS.iter().find(|a| a.item == item) {
         return Some(a.slot);
     }
-    if item.ends_with("_axe") || item.ends_with("_pickaxe") || item == "fishing_rod" {
+    if item.ends_with("_axe")
+        || item.ends_with("_pickaxe")
+        || item.ends_with("_sword")
+        || item == "fishing_rod"
+    {
         Some("right_hand")
     } else {
         None
@@ -998,6 +1002,36 @@ fn armor_def(item: &str) -> Option<ArmorDef> {
     ARMOR_DEFS.iter().find(|a| a.item == item).copied()
 }
 
+#[derive(Clone, Copy)]
+struct SwordDef {
+    item: &'static str,
+    name: &'static str,
+    tier: i32,
+    ore: &'static str,
+    ore_qty: i32,
+    /// Attack & strength bonus when equipped (accuracy + max hit) — qty × 2^(tier-1).
+    damage: i32,
+}
+
+const fn sd(item: &'static str, name: &'static str, tier: i32, ore: &'static str, qty: i32) -> SwordDef {
+    SwordDef { item, name, tier, ore, ore_qty: qty, damage: qty * (1 << (tier - 1) as u32) }
+}
+const SWORD_DEFS: [SwordDef; 4] = [
+    sd("copper_sword", "Copper Sword", 1, "copper_ore", 10),
+    sd("iron_sword",   "Iron Sword",   2, "iron_ore",   10),
+    sd("gold_sword",   "Gold Sword",   3, "gold_ore",   10),
+    sd("cobalt_sword", "Cobalt Sword", 4, "cobalt_ore", 10),
+];
+
+fn sword_def(item: &str) -> Option<SwordDef> {
+    SWORD_DEFS.iter().find(|s| s.item == item).copied()
+}
+
+/// Attack & strength bonus from an equipped sword in right_hand (accuracy + max hit).
+fn weapon_damage_bonus(p: &Player) -> i32 {
+    sword_def(&p.equipment.right_hand).map(|s| s.damage).unwrap_or(0)
+}
+
 /// Sum of equipped armor defence bonuses.
 fn armor_defence_bonus(p: &Player) -> i32 {
     let mut total = 0;
@@ -1042,6 +1076,9 @@ fn item_name(item: &str) -> &'static str {
     if let Some(a) = ARMOR_DEFS.iter().find(|a| a.item == item) {
         return a.name;
     }
+    if let Some(s) = SWORD_DEFS.iter().find(|s| s.item == item) {
+        return s.name;
+    }
     "Item"
 }
 
@@ -1049,6 +1086,12 @@ fn armor_value(item: &str) -> Option<i32> {
     let a = ARMOR_DEFS.iter().find(|a| a.item == item)?;
     let ore_unit = sell_value(a.ore)?;
     Some(ore_unit * a.ore_qty)
+}
+
+fn sword_value(item: &str) -> Option<i32> {
+    let s = SWORD_DEFS.iter().find(|s| s.item == item)?;
+    let ore_unit = sell_value(s.ore)?;
+    Some(ore_unit * s.ore_qty)
 }
 
 fn sell_value(item: &str) -> Option<i32> {
@@ -1072,6 +1115,7 @@ fn buy_price(item: &str) -> Option<i32> {
 fn item_value(item: &str) -> Option<i32> {
     buy_price(item)
         .or_else(|| armor_value(item))
+        .or_else(|| sword_value(item))
         .or_else(|| sell_value(item))
 }
 
@@ -1687,6 +1731,17 @@ fn deduct_item(p: &mut Player, item: &str, mut amt: i32) -> bool {
     amt == 0
 }
 
+/// Returns (item, name, ore, ore_qty) for any blacksmith-forgeable item.
+fn forge_recipe(item: &str) -> Option<(&'static str, &'static str, &'static str, i32)> {
+    if let Some(a) = armor_def(item) {
+        return Some((a.item, a.name, a.ore, a.ore_qty));
+    }
+    if let Some(s) = sword_def(item) {
+        return Some((s.item, s.name, s.ore, s.ore_qty));
+    }
+    None
+}
+
 fn forge(g: &mut Game, pid: Pid, item: &str) {
     if !near_blacksmith(g, pid) {
         if let Some(p) = g.players.get_mut(&pid) {
@@ -1694,29 +1749,28 @@ fn forge(g: &mut Game, pid: Pid, item: &str) {
         }
         return;
     }
-    let Some(def) = armor_def(item) else { return };
+    let Some((forged, name, ore, qty)) = forge_recipe(item) else { return };
     let p = g.players.get_mut(&pid).unwrap();
-    if count_item(p, def.ore) < def.ore_qty {
+    if count_item(p, ore) < qty {
         p.log.push(format!(
             "You need {} {} to forge a {}.",
-            def.ore_qty,
-            item_name(def.ore),
-            def.name
+            qty,
+            item_name(ore),
+            name
         ));
         return;
     }
-    let _ = deduct_item(p, def.ore, def.ore_qty);
-    if !add_inv(p, def.item, 1) {
-        // refund
-        for _ in 0..def.ore_qty {
-            add_inv(p, def.ore, 1);
+    let _ = deduct_item(p, ore, qty);
+    if !add_inv(p, forged, 1) {
+        for _ in 0..qty {
+            add_inv(p, ore, 1);
         }
         p.log.push("Inventory full!".into());
         return;
     }
     p.log.push(format!(
         "The blacksmith forges a {} from {} {}.",
-        def.name, def.ore_qty, item_name(def.ore)
+        name, qty, item_name(ore)
     ));
 }
 
@@ -2282,7 +2336,8 @@ fn unequip_slot(g: &mut Game, pid: Pid, eq_slot: &str) {
 fn do_attack(g: &mut Game, pid: Pid, mid: Mid) {
     let (atk, str_) = {
         let p = g.players.get(&pid).unwrap();
-        (p.skills.attack, p.skills.strength)
+        let w = weapon_damage_bonus(p);
+        (p.skills.attack + w, p.skills.strength + w)
     };
     let (mdef, mx, my, kind) = match g.mobs.get(&mid) {
         Some(m) => (m.defence, m.x, m.y, m.kind.clone()),
@@ -2461,7 +2516,7 @@ fn tick_world(g: &mut Game) {
 }
 
 fn forge_catalog() -> Vec<Value> {
-    ARMOR_DEFS
+    let mut out: Vec<Value> = ARMOR_DEFS
         .iter()
         .map(|a| {
             json!({
@@ -2472,10 +2527,25 @@ fn forge_catalog() -> Vec<Value> {
                 "ore": a.ore,
                 "ore_qty": a.ore_qty,
                 "defence": a.defence,
+                "damage": 0,
                 "value": armor_value(a.item).unwrap_or(0),
             })
         })
-        .collect()
+        .collect();
+    out.extend(SWORD_DEFS.iter().map(|s| {
+        json!({
+            "item": s.item,
+            "name": s.name,
+            "slot": "right_hand",
+            "tier": s.tier,
+            "ore": s.ore,
+            "ore_qty": s.ore_qty,
+            "defence": 0,
+            "damage": s.damage,
+            "value": sword_value(s.item).unwrap_or(0),
+        })
+    }));
+    out
 }
 
 fn shop_catalog() -> Vec<Value> {
@@ -2531,6 +2601,14 @@ fn sell_catalog() -> Vec<Value> {
             "name": a.name,
             "tier": a.tier,
             "sell": armor_value(a.item).unwrap_or(0),
+        })
+    }));
+    out.extend(SWORD_DEFS.iter().map(|s| {
+        json!({
+            "item": s.item,
+            "name": s.name,
+            "tier": s.tier,
+            "sell": sword_value(s.item).unwrap_or(0),
         })
     }));
     out

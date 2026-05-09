@@ -173,7 +173,16 @@ body {
 }
 .equip-slot-empty { color: #5c4830; font-size: 22px; }
 .hint { color: #b8a98a; font-size: 11px; margin-top: 4px; line-height: 1.3; }
-#skills-list div { padding: 2px 0; border-bottom: 1px solid #5a4a36; }
+#skills-list .skill-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  border-bottom: 1px solid #5a4a36;
+}
+#skills-list .skill-row-left { min-width: 0; }
+#skills-list .skill-row-right { flex: none; text-align: right; }
 .window h3 {
   margin: 8px 0 4px;
   font-size: 13px;
@@ -375,3 +384,23 @@ body {
   padding: 5px;
   font-family: inherit;
 }
+#item-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  background: linear-gradient(#5a4a36, #3b3024);
+  border: 1px solid #c49a5a;
+  color: #e8d9b8;
+  font-family: "Segoe UI", "Helvetica", monospace;
+  font-size: 12px;
+  padding: 6px 10px;
+  pointer-events: none;
+  z-index: 100;
+  max-width: 180px;
+  line-height: 1.5;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+}
+#item-tooltip.hidden { display: none; }
+#item-tooltip .tt-name { font-weight: bold; color: #ffe066; display: block; margin-bottom: 2px; }
+#item-tooltip .tt-stat { color: #9fd6ff; display: block; }
+#item-tooltip .tt-cost { color: #c9baa3; display: block; }

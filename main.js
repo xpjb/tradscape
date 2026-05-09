@@ -48,6 +48,7 @@ const ITEM_IMG = {
   iron_helm: 'items/iron_helm.png', iron_plate: 'items/iron_plate.png', iron_greaves: 'items/iron_greaves.png', iron_shield: 'items/iron_shield.png',
   gold_helm: 'items/gold_helm.png', gold_plate: 'items/gold_plate.png', gold_greaves: 'items/gold_greaves.png', gold_shield: 'items/gold_shield.png',
   cobalt_helm: 'items/cobalt_helm.png', cobalt_plate: 'items/cobalt_plate.png', cobalt_greaves: 'items/cobalt_greaves.png', cobalt_shield: 'items/cobalt_shield.png',
+  copper_sword: 'items/copper_sword.png', iron_sword: 'items/iron_sword.png', gold_sword: 'items/gold_sword.png', cobalt_sword: 'items/cobalt_sword.png',
 };
 const TILE_COLOR = { grass: '#3a7d2c', dirt: '#7a5a3b', sand: '#d9c787', water: '#2a5fb0', stone: '#888', path: '#a99a82' };
 const OBJ_COLOR  = { tree: '#1f5417', stump: '#5a3a1f', rock: '#666', depleted_rock: '#aaa', bush: '#7a3', boulder: '#777', trader: '#c0a060', angel: '#e8e8ff', blacksmith: '#9a7a55' };
@@ -65,6 +66,7 @@ const ITEM_NAME = {
   iron_helm: 'Iron helm', iron_plate: 'Iron plate', iron_greaves: 'Iron greaves', iron_shield: 'Iron shield',
   gold_helm: 'Gold helm', gold_plate: 'Gold plate', gold_greaves: 'Gold greaves', gold_shield: 'Gold shield',
   cobalt_helm: 'Cobalt helm', cobalt_plate: 'Cobalt plate', cobalt_greaves: 'Cobalt greaves', cobalt_shield: 'Cobalt shield',
+  copper_sword: 'Copper sword', iron_sword: 'Iron sword', gold_sword: 'Gold sword', cobalt_sword: 'Cobalt sword',
 };
 
 function itemName(item) {
@@ -111,16 +113,84 @@ function skillLevelTitle(xp) {
 
 function appendSkillRow(container, label, level, xp) {
   const row = document.createElement('div');
+  row.className = 'skill-row';
   row.title = skillLevelTitle(xp);
-  const grey = document.createElement('span');
-  grey.style.color = '#aaa';
-  grey.textContent = ` (${xp} xp)`;
-  row.append(`${label}: ${level} `, grey);
+  const x = xp | 0;
+  const left = document.createElement('span');
+  left.className = 'skill-row-left';
+  left.append(`${label} ${level} `);
+  const xpSpan = document.createElement('span');
+  xpSpan.style.color = '#aaa';
+  if (level >= XP_MAX_LEVEL) {
+    xpSpan.textContent = `(${x.toLocaleString()}xp)`;
+    left.appendChild(xpSpan);
+    const right = document.createElement('span');
+    right.className = 'skill-row-right';
+    right.style.color = '#aaa';
+    right.textContent = 'Max';
+    row.append(left, right);
+  } else {
+    const nextAt = xpThresholdForLevel(level + 1);
+    xpSpan.textContent = `(${x.toLocaleString()}/${nextAt.toLocaleString()}xp)`;
+    left.appendChild(xpSpan);
+    const right = document.createElement('span');
+    right.className = 'skill-row-right';
+    right.style.color = '#aaa';
+    right.textContent = `${(x - nextAt).toLocaleString()}xp`;
+    row.append(left, right);
+  }
   container.appendChild(row);
 }
 
 function itemIcon(item) {
   return ITEM_IMG[item] || `items/${item}.png`;
+}
+
+// Tooltip — uses @floating-ui/dom loaded as UMD global (FloatingUIDOM)
+const _tooltip = document.getElementById('item-tooltip');
+let _tooltipCleanup = null;
+
+function itemTooltipContent(itemKey, qty) {
+  const forgeData = state && state.forge;
+  const def = forgeData && forgeData.find(r => r.item === itemKey);
+  let html = `<span class="tt-name">${itemName(itemKey)}</span>`;
+  if (qty != null && qty > 1) html += `<span class="tt-cost">Qty: ${qty}</span>`;
+  if (def) {
+    if (def.damage) html += `<span class="tt-stat">+${def.damage} atk/str</span>`;
+    if (def.defence) html += `<span class="tt-stat">+${def.defence} def</span>`;
+    html += `<span class="tt-cost">Forged from ${def.ore_qty} ${itemName(def.ore)}</span>`;
+  }
+  return html;
+}
+
+function showTooltip(anchor, html) {
+  if (!_tooltip || !window.FloatingUIDOM || !html) return;
+  _tooltip.innerHTML = html;
+  _tooltip.classList.remove('hidden');
+  if (_tooltipCleanup) { _tooltipCleanup(); _tooltipCleanup = null; }
+  const { computePosition, offset, flip, shift } = window.FloatingUIDOM;
+  function update() {
+    computePosition(anchor, _tooltip, {
+      placement: 'top',
+      strategy: 'fixed',
+      middleware: [offset(6), flip(), shift({ padding: 4 })],
+    }).then(({ x, y }) => {
+      _tooltip.style.left = `${x}px`;
+      _tooltip.style.top = `${y}px`;
+    });
+  }
+  update();
+}
+
+function hideTooltip() {
+  if (!_tooltip) return;
+  _tooltip.classList.add('hidden');
+  if (_tooltipCleanup) { _tooltipCleanup(); _tooltipCleanup = null; }
+}
+
+function attachItemTooltip(el, getHtmlFn) {
+  el.addEventListener('mouseenter', () => showTooltip(el, getHtmlFn()));
+  el.addEventListener('mouseleave', hideTooltip);
 }
 
 function syncChildren(parent, rows, keyFn, createFn, updateFn) {
@@ -782,6 +852,9 @@ function createInvSlot() {
   slot._img = im;
   slot._label = lbl;
   slot._qty = qty;
+  attachItemTooltip(slot, () => slot._tooltipItem
+    ? itemTooltipContent(slot._tooltipItem, slot._tooltipQty)
+    : '');
   return slot;
 }
 
@@ -795,7 +868,7 @@ function updateInvSlot(slot, row) {
   slot._label.style.display = 'none';
   slot._qty.style.display = 'none';
 
-  if (!it || !it.item) return;
+  if (!it || !it.item) { slot._tooltipItem = null; return; }
 
   slot.classList.add('has-item');
   slot.classList.toggle('offered', row.offered);
@@ -805,7 +878,8 @@ function updateInvSlot(slot, row) {
   slot._label.style.display = '';
   slot._qty.textContent = it.qty > 9999 ? Math.floor(it.qty / 1000) + 'k' : it.qty;
   slot._qty.style.display = it.qty > 1 ? '' : 'none';
-  slot.title = `${itemName(it.item)} x${it.qty}`;
+  slot._tooltipItem = it.item;
+  slot._tooltipQty = it.qty;
   slot.onclick = (e) => {
     if (e.shiftKey) {
       ws.send(JSON.stringify({ t: 'drop', slot: row.slot }));
@@ -869,6 +943,7 @@ function createEquipSlot() {
   wrap._label = lbl;
   wrap._box = box;
   wrap._empty = empty;
+  attachItemTooltip(box, () => wrap._tooltipItem ? itemTooltipContent(wrap._tooltipItem, null) : '');
   return wrap;
 }
 
@@ -881,14 +956,15 @@ function updateEquipSlot(el, row) {
     el._img.src = `assets/${itemIcon(row.item)}`;
     el._img.style.display = '';
     el._empty.style.display = 'none';
-    el.title = `${itemName(row.item)} — click to unequip`;
     el._box.classList.add('has-item');
     el._box.onclick = () => ws.send(JSON.stringify({ t: 'unequip', slot: row.key }));
+    el._tooltipItem = row.item;
   } else {
     el._img.style.display = 'none';
     el._empty.style.display = '';
     el._empty.textContent = '—';
     el._box.classList.remove('has-item');
+    el._tooltipItem = null;
   }
 }
 
@@ -965,9 +1041,10 @@ function renderForge(s) {
     (el, row) => {
       const have = oreCount(row.ore);
       const enough = have >= row.ore_qty;
+      const bonus = row.damage ? `+${row.damage} atk/str` : `+${row.defence} def`;
       updateTradeButton(el, {
         item: row.item,
-        name: `${row.name}  +${row.defence} def`,
+        name: `${row.name}  ${bonus}`,
         detail: `${row.ore_qty} ${itemName(row.ore)} (${have}/${row.ore_qty})`,
         onClick: () => ws.send(JSON.stringify({ t: 'forge', item: row.item })),
         disabled: !enough,
@@ -1050,6 +1127,7 @@ function createTradeButton() {
   el._img = im;
   el._label = label;
   el._price = price;
+  attachItemTooltip(el, () => el._tooltipItem ? itemTooltipContent(el._tooltipItem, null) : '');
   return el;
 }
 
@@ -1061,6 +1139,7 @@ function updateTradeButton(el, { item, name, detail, onClick, disabled = false }
   el._label.textContent = name;
   el._price.textContent = detail;
   el.onclick = onClick;
+  el._tooltipItem = item;
 }
 
 function tradeButton(opts) {
