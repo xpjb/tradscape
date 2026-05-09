@@ -1581,20 +1581,36 @@ fn push_private_chat(g: &mut Game, pid: Pid, text: impl Into<String>) {
     }
 }
 
-fn add_chat(g: &mut Game, pid: Pid, text: &str) {
+fn add_chat(g: &mut Game, pid: Pid, text: &str) -> bool {
     let text = text.trim();
     if text.is_empty() {
-        return;
+        return false;
     }
     let clean: String = text.chars().filter(|c| !c.is_control()).take(160).collect();
     if clean.is_empty() {
-        return;
+        return false;
     }
 
     if clean == "/help" {
-        push_private_chat(g, pid, "Commands: /help, /nick name");
+        push_private_chat(g, pid, "Commands: /help, /nick name, /die");
         push_private_chat(g, pid, "Controls: left click to walk, chop, mine, fish (rod + water), attack, trade. Right click to stop.");
-        return;
+        return false;
+    }
+    if clean == "/die" {
+        cancel_player_trade(g, pid, "Trade cancelled.");
+        let spawn = g.player_spawn;
+        if let Some(p) = g.players.get_mut(&pid) {
+            p.hp_cur = p.skills.hp;
+            p.x = spawn.0;
+            p.y = spawn.1;
+            p.intent = Intent::None;
+            p.target = None;
+            p.trade_open = false;
+            p.angel_modal_open = false;
+            p.log.push("You die! Respawning...".into());
+            return true;
+        }
+        return false;
     }
     if let Some(rest) = clean.strip_prefix("/nick ") {
         let new_name = clean_name(rest);
@@ -1604,7 +1620,7 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) {
                 p.name = new_name.clone();
                 old
             }
-            None => return,
+            None => return false,
         };
         g.chat_seq += 1;
         g.chat.push_back(ChatMsg {
@@ -1617,11 +1633,11 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) {
         while g.chat.len() > 50 {
             g.chat.pop_front();
         }
-        return;
+        return false;
     }
     if clean.starts_with('/') {
         push_private_chat(g, pid, "Unknown command. Try /help.");
-        return;
+        return false;
     }
 
     let name = g
@@ -1640,6 +1656,7 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) {
     while g.chat.len() > 50 {
         g.chat.pop_front();
     }
+    false
 }
 fn eat(g: &mut Game, pid: Pid, slot: usize) {
     let p = g.players.get_mut(&pid).unwrap();
@@ -2559,7 +2576,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                             .and_then(|x| x.as_str())
                             .unwrap_or("")
                             .to_string();
-                        add_chat(&mut g, pid, &text);
+                        push_state |= add_chat(&mut g, pid, &text);
                     }
                     _ => {}
                 }
