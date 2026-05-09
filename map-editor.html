@@ -99,16 +99,17 @@ button:hover { border-color: #666; background: #2c2c2c; }
 
 <script>
 const TILE_KINDS = ['grass', 'dirt', 'sand', 'water', 'stone', 'path'];
-const OBJECT_KINDS = ['none', 'tree', 'rock', 'bush', 'boulder', 'trader', 'angel'];
+const OBJECT_KINDS = ['none', 'tree', 'rock', 'bush', 'boulder', 'trader', 'angel', 'blacksmith'];
 const MOB_KINDS = ['goblin', 'club_goblin', 'ninja', 'dragon'];
 const TILE_COLOR = { grass: '#3a7d2c', dirt: '#7a5a3b', sand: '#d9c787', water: '#2a5fb0', stone: '#888', path: '#a99a82' };
-const OBJ_COLOR  = { tree: '#1f5417', rock: '#666', bush: '#7a3', boulder: '#777', trader: '#c0a060', angel: '#e8e8ff' };
+const OBJ_COLOR  = { tree: '#1f5417', rock: '#666', bush: '#7a3', boulder: '#777', trader: '#c0a060', angel: '#e8e8ff', blacksmith: '#9a7a55' };
 const MOB_COLOR  = { goblin: '#7caa3c', club_goblin: '#6b8f2a', ninja: '#2b2b35', dragon: '#8b2222' };
 const TILE_IMG = { grass: 'tiles/grass.png', dirt: 'tiles/dirt.png', sand: 'tiles/sand.png', water: 'tiles/water.png', stone: 'tiles/stone.png', path: 'tiles/path.png' };
 const OBJ_IMG = {
   tree_tier_1: 'entities/tree_pine.png', tree_tier_2: 'entities/tree_oak.png', tree_tier_3: 'entities/tree_yew.png', tree_tier_4: 'entities/tree_magic.png',
   rock_tier_1: 'entities/rock_copper.png', rock_tier_2: 'entities/rock_iron.png', rock_tier_3: 'entities/rock_gold.png', rock_tier_4: 'entities/rock_cobalt.png',
   bush: 'entities/berry_bush.png', boulder: 'entities/boulder.png', trader: 'entities/trader.png', angel: 'entities/angel.png',
+  blacksmith: 'entities/blacksmith.png',
 };
 const MOB_IMG = { goblin: 'entities/goblin.png', club_goblin: 'entities/club_goblin.png', ninja: 'entities/ninja.png', dragon: 'entities/dragon.png' };
 const MOB_PRESETS = {
@@ -131,6 +132,7 @@ const ENTITY_BRUSHES = [
   { label: 'Boulder', object: { kind: 'boulder' }, color: OBJ_COLOR.boulder },
   { label: 'Trader', object: { kind: 'trader' }, color: OBJ_COLOR.trader },
   { label: 'Angel', object: { kind: 'angel' }, color: OBJ_COLOR.angel },
+  { label: 'Blacksmith', object: { kind: 'blacksmith' }, color: OBJ_COLOR.blacksmith },
 ];
 const MOB_LABEL = { goblin: 'Goblin', club_goblin: 'Club goblin', ninja: 'Ninja', dragon: 'Dragon' };
 

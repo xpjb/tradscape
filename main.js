@@ -29,6 +29,7 @@ const OBJ_IMG = {
   depleted_rock: 'entities/rock_depleted.png',
   bush: 'entities/berry_bush.png', bush_empty: 'entities/berry_bush_empty.png',
   boulder: 'entities/boulder.png', trader: 'entities/trader.png', angel: 'entities/angel.png',
+  blacksmith: 'entities/blacksmith.png',
 };
 const MOB_IMG = {
   goblin: 'entities/goblin.png',
@@ -43,9 +44,13 @@ const ITEM_IMG = {
   bronze_axe: 'items/bronze_axe.png', iron_axe: 'items/iron_axe.png', steel_axe: 'items/steel_axe.png', cobalt_axe: 'items/cobalt_axe.png',
   bronze_pickaxe: 'items/bronze_pickaxe.png', iron_pickaxe: 'items/iron_pickaxe.png', steel_pickaxe: 'items/steel_pickaxe.png', cobalt_pickaxe: 'items/cobalt_pickaxe.png',
   fishing_rod: 'items/fishing_rod.png',
+  copper_helm: 'items/copper_helm.png', copper_plate: 'items/copper_plate.png', copper_greaves: 'items/copper_greaves.png', copper_shield: 'items/copper_shield.png',
+  iron_helm: 'items/iron_helm.png', iron_plate: 'items/iron_plate.png', iron_greaves: 'items/iron_greaves.png', iron_shield: 'items/iron_shield.png',
+  gold_helm: 'items/gold_helm.png', gold_plate: 'items/gold_plate.png', gold_greaves: 'items/gold_greaves.png', gold_shield: 'items/gold_shield.png',
+  cobalt_helm: 'items/cobalt_helm.png', cobalt_plate: 'items/cobalt_plate.png', cobalt_greaves: 'items/cobalt_greaves.png', cobalt_shield: 'items/cobalt_shield.png',
 };
 const TILE_COLOR = { grass: '#3a7d2c', dirt: '#7a5a3b', sand: '#d9c787', water: '#2a5fb0', stone: '#888', path: '#a99a82' };
-const OBJ_COLOR  = { tree: '#1f5417', stump: '#5a3a1f', rock: '#666', depleted_rock: '#aaa', bush: '#7a3', boulder: '#777', trader: '#c0a060', angel: '#e8e8ff' };
+const OBJ_COLOR  = { tree: '#1f5417', stump: '#5a3a1f', rock: '#666', depleted_rock: '#aaa', bush: '#7a3', boulder: '#777', trader: '#c0a060', angel: '#e8e8ff', blacksmith: '#9a7a55' };
 const MOB_COLOR  = { goblin: '#7caa3c', club_goblin: '#6b8f2a', ninja: '#2b2b35', dragon: '#8b2222' };
 const MOB_LABEL = { goblin: 'G', club_goblin: 'C', ninja: 'N', dragon: 'D' };
 const WALKABLE_OBJ = new Set(['none']);
@@ -56,6 +61,10 @@ const ITEM_NAME = {
   bronze_axe: 'Bronze axe', iron_axe: 'Iron axe', steel_axe: 'Steel axe', cobalt_axe: 'Cobalt axe',
   bronze_pickaxe: 'Bronze pickaxe', iron_pickaxe: 'Iron pickaxe', steel_pickaxe: 'Steel pickaxe', cobalt_pickaxe: 'Cobalt pickaxe',
   fishing_rod: 'Fishing rod',
+  copper_helm: 'Copper helm', copper_plate: 'Copper plate', copper_greaves: 'Copper greaves', copper_shield: 'Copper shield',
+  iron_helm: 'Iron helm', iron_plate: 'Iron plate', iron_greaves: 'Iron greaves', iron_shield: 'Iron shield',
+  gold_helm: 'Gold helm', gold_plate: 'Gold plate', gold_greaves: 'Gold greaves', gold_shield: 'Gold shield',
+  cobalt_helm: 'Cobalt helm', cobalt_plate: 'Cobalt plate', cobalt_greaves: 'Cobalt greaves', cobalt_shield: 'Cobalt shield',
 };
 
 function itemName(item) {
@@ -681,6 +690,11 @@ document.getElementById('trade-close').onclick = () => {
   ws.send(JSON.stringify({ t: 'close_trade' }));
 };
 
+document.getElementById('forge-close').onclick = () => {
+  document.getElementById('forge-window').classList.add('hidden');
+  ws.send(JSON.stringify({ t: 'close_forge' }));
+};
+
 document.getElementById('player-trade-close').onclick = () => {
   document.getElementById('player-trade-window').classList.add('hidden');
   ws.send(JSON.stringify({ t: 'close_player_trade' }));
@@ -730,6 +744,7 @@ function updatePanel(s) {
   document.getElementById('eq-list').textContent = `axe T${s.you.axe_tier || 0}, pickaxe T${s.you.pickaxe_tier || 0}, rod T${s.you.rod_tier || 0}`;
   renderEquipment(s.you.equipment || {});
   renderTrade(s);
+  renderForge(s);
   renderPlayerTrade(s);
   renderAngelModal(s);
   renderChat(s.chat || []);
@@ -796,17 +811,16 @@ function updateInvSlot(slot, row) {
       ws.send(JSON.stringify({ t: 'drop', slot: row.slot }));
       return;
     }
-    if (e.ctrlKey || e.metaKey) {
-      ws.send(JSON.stringify({ t: 'equip', slot: row.slot }));
-      return;
-    }
     if (row.tradeOpen) {
       ws.send(JSON.stringify({ t: 'trade_offer_slot', slot: row.slot }));
       return;
     }
-    if (it.item !== 'berries' && it.item !== 'salmon') return;
-    if (row.hpCur >= row.hpMax) return;
-    ws.send(JSON.stringify({ t: 'eat', slot: row.slot }));
+    if (it.item === 'berries' || it.item === 'salmon') {
+      if (row.hpCur >= row.hpMax) return;
+      ws.send(JSON.stringify({ t: 'eat', slot: row.slot }));
+      return;
+    }
+    ws.send(JSON.stringify({ t: 'equip', slot: row.slot }));
   };
   slot.oncontextmenu = (e) => {
     e.preventDefault();
@@ -859,6 +873,7 @@ function createEquipSlot() {
 }
 
 function updateEquipSlot(el, row) {
+  el.dataset.slot = row.key;
   el._label.textContent = row.label;
   el.title = '';
   el._box.onclick = null;
@@ -926,6 +941,36 @@ function renderTrade(s) {
         detail: canSell ? `${row.sale.sell * row.it.qty}gp` : 'not for sale',
         onClick: () => ws.send(JSON.stringify({ t: 'sell', slot: row.slot })),
         disabled: !canSell,
+      });
+    },
+  );
+}
+
+function renderForge(s) {
+  const win = document.getElementById('forge-window');
+  const list = document.getElementById('forge-list');
+  if (!win || !list) return;
+  const open = !!s.you.forge_open;
+  win.classList.toggle('hidden', !open);
+  if (!open) return;
+
+  const inv = s.you.inv || [];
+  const oreCount = (ore) => inv.reduce((acc, it) => acc + (it && it.item === ore ? it.qty : 0), 0);
+  const items = s.forge || [];
+  syncChildren(
+    list,
+    items,
+    row => row.item,
+    () => createTradeButton(),
+    (el, row) => {
+      const have = oreCount(row.ore);
+      const enough = have >= row.ore_qty;
+      updateTradeButton(el, {
+        item: row.item,
+        name: `${row.name}  +${row.defence} def`,
+        detail: `${row.ore_qty} ${itemName(row.ore)} (${have}/${row.ore_qty})`,
+        onClick: () => ws.send(JSON.stringify({ t: 'forge', item: row.item })),
+        disabled: !enough,
       });
     },
   );

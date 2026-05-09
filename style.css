@@ -12,7 +12,7 @@ body {
   user-select: none;
   -webkit-user-select: none;
 }
-#game { display: flex; gap: 8px; }
+#game { display: flex; gap: 8px; position: relative; }
 #world {
   background: #000;
   image-rendering: pixelated;
@@ -136,10 +136,21 @@ body {
 #equipped { font-size: 12px; margin-bottom: 4px; }
 #equip-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 72px 72px 72px;
+  grid-template-rows: auto auto auto;
+  grid-template-areas:
+    ".         helmet    .         "
+    "left_hand chest     right_hand"
+    ".         legs      .         ";
+  justify-content: center;
   gap: 6px;
   margin-bottom: 8px;
 }
+.equip-slot[data-slot="helmet"]     { grid-area: helmet; }
+.equip-slot[data-slot="chest"]      { grid-area: chest; }
+.equip-slot[data-slot="legs"]       { grid-area: legs; }
+.equip-slot[data-slot="left_hand"]  { grid-area: left_hand; }
+.equip-slot[data-slot="right_hand"] { grid-area: right_hand; }
 .equip-slot { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .equip-slot-label { font-size: 11px; color: #c9baa3; }
 .equip-slot-box {
@@ -192,20 +203,28 @@ body {
 .trade-row:disabled:hover { background: #5a4a36; }
 .window.hidden { display: none; }
 .window {
-  position: fixed;
-  inset: 0;
+  /* Anchor over the canvas only, leaving the right-hand inventory panel free. */
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 260px; /* panel width (252) + #game gap (8) */
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.35);
   z-index: 10;
+  pointer-events: none; /* let inventory clicks pass; card re-enables them */
 }
 .window-card {
-  width: min(720px, calc(100vw - 32px));
+  width: min(640px, 100%);
+  max-height: 100%;
+  overflow: auto;
   background: linear-gradient(#5a4a36, #3b3024);
   border: 2px solid #c49a5a;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
   padding: 10px;
+  pointer-events: auto;
 }
 .window-title {
   display: flex;
@@ -216,7 +235,10 @@ body {
   margin-bottom: 8px;
 }
 .window-card-narrow {
-  width: min(440px, calc(100vw - 32px));
+  width: min(440px, 100%);
+}
+.player-trade-card {
+  width: min(620px, 100%);
 }
 .angel-dialog {
   margin: 0 0 10px;
@@ -285,9 +307,6 @@ body {
 .trade-row .trade-price {
   color: #ffe066;
   white-space: nowrap;
-}
-.player-trade-card {
-  width: min(620px, calc(100vw - 32px));
 }
 .trade-stage,
 .trade-status {

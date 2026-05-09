@@ -88,6 +88,8 @@ enum Obj {
     Boulder,
     Trader,
     Angel,
+    #[allow(dead_code)] // constructed by build.rs once a blacksmith is placed in map.json
+    Blacksmith,
 }
 
 #[derive(Clone, Copy, Serialize, PartialEq)]
@@ -182,6 +184,9 @@ impl Equipment {
 
 /// Items in `slot` go to which equipment slot, if any.
 fn item_equip_slot(item: &str) -> Option<&'static str> {
+    if let Some(a) = ARMOR_DEFS.iter().find(|a| a.item == item) {
+        return Some(a.slot);
+    }
     if item.ends_with("_axe") || item.ends_with("_pickaxe") || item == "fishing_rod" {
         Some("right_hand")
     } else {
@@ -227,6 +232,7 @@ struct Player {
     target: Option<(i32, i32)>,
     intent: Intent,
     trade_open: bool,
+    forge_open: bool,
     trade_request_from: Option<Pid>,
     trade_partner: Option<Pid>,
     trade_stage: TradeStage,
@@ -262,6 +268,7 @@ impl Player {
             target: None,
             intent: Intent::None,
             trade_open: false,
+            forge_open: false,
             trade_request_from: None,
             trade_partner: None,
             trade_stage: TradeStage::Offer,
@@ -949,6 +956,62 @@ const TOOL_DEFS: [ToolDef; 9] = [
     },
 ];
 
+#[derive(Clone, Copy)]
+struct ArmorDef {
+    item: &'static str,
+    name: &'static str,
+    slot: &'static str,
+    tier: i32,
+    ore: &'static str,
+    ore_qty: i32,
+    defence: i32,
+}
+
+/// Armor crafted at the blacksmith. Defence is linear in ore qty (5/10/7/6
+/// for helm/plate/greaves/shield) and scales with tier (×1, ×2, ×4, ×8).
+/// Item gp value equals the input ore value (see `sell_value` / `item_value`).
+const fn ad(item: &'static str, name: &'static str, slot: &'static str,
+            tier: i32, ore: &'static str, qty: i32) -> ArmorDef {
+    ArmorDef { item, name, slot, tier, ore, ore_qty: qty,
+               defence: qty * (1 << (tier - 1) as u32) }
+}
+const ARMOR_DEFS: [ArmorDef; 16] = [
+    ad("copper_helm",    "Copper Helm",    "helmet",    1, "copper_ore", 5),
+    ad("copper_plate",   "Copper Plate",   "chest",     1, "copper_ore", 10),
+    ad("copper_greaves", "Copper Greaves", "legs",      1, "copper_ore", 7),
+    ad("copper_shield",  "Copper Shield",  "left_hand", 1, "copper_ore", 6),
+    ad("iron_helm",      "Iron Helm",      "helmet",    2, "iron_ore",   5),
+    ad("iron_plate",     "Iron Plate",     "chest",     2, "iron_ore",   10),
+    ad("iron_greaves",   "Iron Greaves",   "legs",      2, "iron_ore",   7),
+    ad("iron_shield",    "Iron Shield",    "left_hand", 2, "iron_ore",   6),
+    ad("gold_helm",      "Gold Helm",      "helmet",    3, "gold_ore",   5),
+    ad("gold_plate",     "Gold Plate",     "chest",     3, "gold_ore",   10),
+    ad("gold_greaves",   "Gold Greaves",   "legs",      3, "gold_ore",   7),
+    ad("gold_shield",    "Gold Shield",    "left_hand", 3, "gold_ore",   6),
+    ad("cobalt_helm",    "Cobalt Helm",    "helmet",    4, "cobalt_ore", 5),
+    ad("cobalt_plate",   "Cobalt Plate",   "chest",     4, "cobalt_ore", 10),
+    ad("cobalt_greaves", "Cobalt Greaves", "legs",      4, "cobalt_ore", 7),
+    ad("cobalt_shield",  "Cobalt Shield",  "left_hand", 4, "cobalt_ore", 6),
+];
+
+fn armor_def(item: &str) -> Option<ArmorDef> {
+    ARMOR_DEFS.iter().find(|a| a.item == item).copied()
+}
+
+/// Sum of equipped armor defence bonuses.
+fn armor_defence_bonus(p: &Player) -> i32 {
+    let mut total = 0;
+    for slot in EQUIP_SLOT_NAMES {
+        let it = p.equipment.get(slot);
+        if !it.is_empty() {
+            if let Some(a) = armor_def(it) {
+                total += a.defence;
+            }
+        }
+    }
+    total
+}
+
 fn tree_def(tier: i32) -> ResourceDef {
     let i = (tier - 1).clamp(0, TREE_DEFS.len() as i32 - 1) as usize;
     TREE_DEFS[i]
@@ -976,7 +1039,16 @@ fn item_name(item: &str) -> &'static str {
     if let Some(t) = TOOL_DEFS.iter().find(|t| t.item == item) {
         return t.name;
     }
+    if let Some(a) = ARMOR_DEFS.iter().find(|a| a.item == item) {
+        return a.name;
+    }
     "Item"
+}
+
+fn armor_value(item: &str) -> Option<i32> {
+    let a = ARMOR_DEFS.iter().find(|a| a.item == item)?;
+    let ore_unit = sell_value(a.ore)?;
+    Some(ore_unit * a.ore_qty)
 }
 
 fn sell_value(item: &str) -> Option<i32> {
@@ -998,7 +1070,9 @@ fn buy_price(item: &str) -> Option<i32> {
 }
 
 fn item_value(item: &str) -> Option<i32> {
-    buy_price(item).or_else(|| sell_value(item))
+    buy_price(item)
+        .or_else(|| armor_value(item))
+        .or_else(|| sell_value(item))
 }
 
 fn xp_with_bonus(base: i32, angel_points: i32) -> i32 {
@@ -1115,6 +1189,7 @@ fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
         Obj::Bush { berries, .. } if *berries > 0 => Intent::Pick,
         Obj::Trader => Intent::Talk,
         Obj::Angel => Intent::Talk,
+        Obj::Blacksmith => Intent::Talk,
         _ => Intent::None,
     };
     if matches!(intent, Intent::None) && matches!(g.tile(x, y), Tile::Water) {
@@ -1136,14 +1211,21 @@ fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
         let p = g.players.get_mut(&pid).unwrap();
         p.trade_open = false;
         p.angel_modal_open = false;
+        p.forge_open = false;
     } else {
         let p = g.players.get_mut(&pid).unwrap();
         match clicked_obj {
             Obj::Trader => {
                 p.angel_modal_open = false;
+                p.forge_open = false;
             }
             Obj::Angel => {
                 p.trade_open = false;
+                p.forge_open = false;
+            }
+            Obj::Blacksmith => {
+                p.trade_open = false;
+                p.angel_modal_open = false;
             }
             _ => {}
         }
@@ -1202,6 +1284,20 @@ fn near_trader(g: &Game, pid: Pid) -> bool {
             let nx = p.x + dx;
             let ny = p.y + dy;
             if g.in_b(nx, ny) && matches!(g.obj(nx, ny), Obj::Trader) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn near_blacksmith(g: &Game, pid: Pid) -> bool {
+    let p = &g.players[&pid];
+    for dy in -1..=1i32 {
+        for dx in -1..=1i32 {
+            let nx = p.x + dx;
+            let ny = p.y + dy;
+            if g.in_b(nx, ny) && matches!(g.obj(nx, ny), Obj::Blacksmith) {
                 return true;
             }
         }
@@ -1567,6 +1663,63 @@ fn sell(g: &mut Game, pid: Pid, slot: usize) {
         .push(format!("Sold {}x{} for {}gp.", item, qty, unit * qty));
 }
 
+fn count_item(p: &Player, item: &str) -> i32 {
+    p.inv.iter().filter(|s| s.item == item).map(|s| s.qty).sum()
+}
+
+fn deduct_item(p: &mut Player, item: &str, mut amt: i32) -> bool {
+    if count_item(p, item) < amt {
+        return false;
+    }
+    for s in p.inv.iter_mut() {
+        if s.item == item && s.qty > 0 {
+            let take = amt.min(s.qty);
+            s.qty -= take;
+            amt -= take;
+            if s.qty == 0 {
+                *s = InvSlot::default();
+            }
+            if amt == 0 {
+                return true;
+            }
+        }
+    }
+    amt == 0
+}
+
+fn forge(g: &mut Game, pid: Pid, item: &str) {
+    if !near_blacksmith(g, pid) {
+        if let Some(p) = g.players.get_mut(&pid) {
+            p.log.push("Stand next to the blacksmith.".into());
+        }
+        return;
+    }
+    let Some(def) = armor_def(item) else { return };
+    let p = g.players.get_mut(&pid).unwrap();
+    if count_item(p, def.ore) < def.ore_qty {
+        p.log.push(format!(
+            "You need {} {} to forge a {}.",
+            def.ore_qty,
+            item_name(def.ore),
+            def.name
+        ));
+        return;
+    }
+    let _ = deduct_item(p, def.ore, def.ore_qty);
+    if !add_inv(p, def.item, 1) {
+        // refund
+        for _ in 0..def.ore_qty {
+            add_inv(p, def.ore, 1);
+        }
+        p.log.push("Inventory full!".into());
+        return;
+    }
+    p.log.push(format!(
+        "The blacksmith forges a {} from {} {}.",
+        def.name, def.ore_qty, item_name(def.ore)
+    ));
+}
+
 fn push_private_chat(g: &mut Game, pid: Pid, text: impl Into<String>) {
     g.chat_seq += 1;
     let msg = ChatMsg {
@@ -1607,6 +1760,7 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) -> bool {
             p.target = None;
             p.trade_open = false;
             p.angel_modal_open = false;
+            p.forge_open = false;
             p.log.push("You die! Respawning...".into());
             return true;
         }
@@ -1759,10 +1913,17 @@ fn process_player(g: &mut Game, pid: Pid) {
                     Obj::Trader => {
                         p.trade_open = true;
                         p.angel_modal_open = false;
+                        p.forge_open = false;
                     }
                     Obj::Angel => {
                         p.angel_modal_open = true;
                         p.trade_open = false;
+                        p.forge_open = false;
+                    }
+                    Obj::Blacksmith => {
+                        p.forge_open = true;
+                        p.trade_open = false;
+                        p.angel_modal_open = false;
                     }
                     _ => {}
                 }
@@ -2072,7 +2233,6 @@ fn equip_from_inv(g: &mut Game, pid: Pid, slot: usize) {
         return;
     }
     let Some(eq_slot) = item_equip_slot(&item) else {
-        p.log.push(format!("{} cannot be equipped.", item_name(&item)));
         return;
     };
     let qty = p.inv[slot].qty;
@@ -2206,7 +2366,10 @@ fn process_mob(g: &mut Game, mid: Mid) {
             let m = g.mobs.get(&mid).unwrap();
             (m.attack, m.strength)
         };
-        let pdef = g.players.get(&tpid).unwrap().skills.defence;
+        let pdef = {
+            let p = g.players.get(&tpid).unwrap();
+            p.skills.defence + armor_defence_bonus(p)
+        };
         let dmg = roll_hit(matk, pdef, mstr);
         g.events.push(json!({"k": if dmg == 0 { "miss_player" } else { "hit_player" }, "x": tx, "y": ty, "dmg": dmg}));
         let spawn = g.player_spawn;
@@ -2242,6 +2405,7 @@ fn process_mob(g: &mut Game, mid: Mid) {
             p.target = None;
             p.trade_open = false;
             p.angel_modal_open = false;
+            p.forge_open = false;
         }
     } else if let Some(mut path) = bfs(g, pos, GoalKind::Adjacent((tx, ty)), 0) {
         if let Some(step) = path.pop_front() {
@@ -2296,6 +2460,24 @@ fn tick_world(g: &mut Game) {
     }
 }
 
+fn forge_catalog() -> Vec<Value> {
+    ARMOR_DEFS
+        .iter()
+        .map(|a| {
+            json!({
+                "item": a.item,
+                "name": a.name,
+                "slot": a.slot,
+                "tier": a.tier,
+                "ore": a.ore,
+                "ore_qty": a.ore_qty,
+                "defence": a.defence,
+                "value": armor_value(a.item).unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
 fn shop_catalog() -> Vec<Value> {
     TOOL_DEFS
         .iter()
@@ -2343,6 +2525,14 @@ fn sell_catalog() -> Vec<Value> {
     }));
     out.push(json!({ "item": "berries", "name": "Berries", "tier": 1, "sell": 1, "xp": 0 }));
     out.push(json!({ "item": "salmon", "name": "Salmon", "tier": 2, "sell": 35, "xp": 42 }));
+    out.extend(ARMOR_DEFS.iter().map(|a| {
+        json!({
+            "item": a.item,
+            "name": a.name,
+            "tier": a.tier,
+            "sell": armor_value(a.item).unwrap_or(0),
+        })
+    }));
     out
 }
 
@@ -2399,9 +2589,11 @@ fn build_state_msg(g: &Game, pid: Pid) -> String {
                  "inv": p.inv, "equipment": p.equipment,
                  "axe_tier": axe_tier, "pickaxe_tier": pickaxe_tier, "rod_tier": rod_tier,
                  "intent": p.intent, "target": p.target, "trade_open": p.trade_open && near_trader(g, pid),
-                 "angel_modal_open": p.angel_modal_open && near_angel(g, pid) },
+                 "angel_modal_open": p.angel_modal_open && near_angel(g, pid),
+                 "forge_open": p.forge_open && near_blacksmith(g, pid),
+                 "armor_defence": armor_defence_bonus(p) },
         "players": players, "mobs": mobs, "objects": g.objects, "ground": g.ground, "log": p.log,
-        "shop": shop_catalog(), "sells": sell_catalog(),
+        "shop": shop_catalog(), "sells": sell_catalog(), "forge": forge_catalog(),
         "player_trade": player_trade,
         "chat": chat,
         "events": g.events,
@@ -2550,6 +2742,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                         if let Some(p) = g.players.get_mut(&pid) {
                             p.trade_open = false;
                         }
+                    }
+                    "close_forge" => {
+                        if let Some(p) = g.players.get_mut(&pid) {
+                            p.forge_open = false;
+                        }
+                    }
+                    "forge" => {
+                        let item = v
+                            .get("item")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        forge(&mut g, pid, &item);
+                        push_state = true;
                     }
                     "close_player_trade" => {
                         cancel_player_trade(&mut g, pid, "Trade declined.");

@@ -520,9 +520,9 @@
     "grass",
     "grass",
     "grass",
-    "grass",
-    "grass",
-    "grass",
+    "dirt",
+    "dirt",
+    "dirt",
     "grass",
     "grass",
     "water",
@@ -594,9 +594,9 @@
     "grass",
     "grass",
     "grass",
-    "grass",
-    "grass",
-    "grass",
+    "dirt",
+    "dirt",
+    "dirt",
     "grass",
     "grass",
     "water",
@@ -668,9 +668,9 @@
     "grass",
     "grass",
     "grass",
-    "grass",
-    "grass",
-    "grass",
+    "dirt",
+    "dirt",
+    "dirt",
     "grass",
     "grass",
     "water",
@@ -742,7 +742,7 @@
     "grass",
     "grass",
     "grass",
-    "grass",
+    "path",
     "grass",
     "grass",
     "grass",
@@ -811,89 +811,15 @@
     "dirt",
     "dirt",
     "dirt",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
     "water",
     "water",
     "water",
     "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "water",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
     "grass",
     "path",
     "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
+    "water",
+    "water",
     "grass",
     "water",
     "water",
@@ -964,7 +890,81 @@
     "grass",
     "grass",
     "grass",
+    "path",
     "grass",
+    "grass",
+    "grass",
+    "grass",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "water",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "path",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
+    "path",
     "grass",
     "grass",
     "grass",
@@ -1038,7 +1038,7 @@
     "grass",
     "grass",
     "grass",
-    "grass",
+    "path",
     "grass",
     "grass",
     "grass",
@@ -1112,7 +1112,7 @@
     "grass",
     "grass",
     "grass",
-    "grass",
+    "path",
     "grass",
     "grass",
     "grass",
@@ -1182,11 +1182,11 @@
     "grass",
     "grass",
     "grass",
+    "grass",
+    "grass",
+    "grass",
+    "grass",
     "path",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
     "grass",
     "grass",
     "grass",
@@ -1257,10 +1257,10 @@
     "path",
     "path",
     "path",
-    "grass",
-    "grass",
-    "grass",
-    "grass",
+    "path",
+    "path",
+    "path",
+    "path",
     "grass",
     "grass",
     "grass",
@@ -1330,8 +1330,8 @@
     "path",
     "grass",
     "grass",
-    "path",
-    "path",
+    "grass",
+    "grass",
     "path",
     "grass",
     "grass",
@@ -1406,7 +1406,7 @@
     "grass",
     "grass",
     "grass",
-    "path",
+    "grass",
     "path",
     "grass",
     "grass",
@@ -1481,7 +1481,7 @@
     "grass",
     "grass",
     "grass",
-    "path",
+    "grass",
     "path",
     "grass",
     "grass",
@@ -1556,7 +1556,7 @@
     "grass",
     "grass",
     "grass",
-    "path",
+    "grass",
     "path",
     "grass",
     "grass",
@@ -6924,8 +6924,7 @@
       "kind": "none"
     },
     {
-      "kind": "tree",
-      "tier": 2
+      "kind": "none"
     },
     {
       "kind": "tree",
@@ -7136,10 +7135,6 @@
       "tier": 1
     },
     {
-      "kind": "tree",
-      "tier": 2
-    },
-    {
       "kind": "none"
     },
     {
@@ -7149,8 +7144,10 @@
       "kind": "none"
     },
     {
-      "kind": "tree",
-      "tier": 3
+      "kind": "none"
+    },
+    {
+      "kind": "none"
     },
     {
       "kind": "none"
@@ -7376,7 +7373,7 @@
       "kind": "none"
     },
     {
-      "kind": "none"
+      "kind": "blacksmith"
     },
     {
       "kind": "none"
@@ -7836,8 +7833,7 @@
       "kind": "none"
     },
     {
-      "kind": "tree",
-      "tier": 2
+      "kind": "none"
     },
     {
       "kind": "tree",
@@ -8043,8 +8039,7 @@
       "kind": "none"
     },
     {
-      "kind": "tree",
-      "tier": 2
+      "kind": "none"
     },
     {
       "kind": "none"
@@ -8731,8 +8726,7 @@
       "kind": "none"
     },
     {
-      "kind": "tree",
-      "tier": 2
+      "kind": "none"
     },
     {
       "kind": "none"
@@ -22599,388 +22593,406 @@
       "kind": "goblin",
       "x": 28,
       "y": 6,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 9,
       "y": 17,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 9,
       "y": 19,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 8,
       "y": 18,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 7,
       "y": 19,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 7,
       "y": 17,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 59,
       "y": 6,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "goblin",
       "x": 50,
       "y": 10,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 28,
       "y": 37,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 22,
       "y": 30,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 28,
       "y": 47,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 35,
       "y": 45,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 31,
       "y": 51,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 27,
       "y": 56,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 36,
       "y": 56,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 34,
       "y": 57,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "ninja",
       "x": 42,
       "y": 63,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "ninja",
       "x": 58,
       "y": 27,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "ninja",
       "x": 58,
       "y": 32,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "ninja",
       "x": 63,
       "y": 32,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "ninja",
       "x": 63,
       "y": 27,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "goblin",
       "x": 54,
       "y": 18,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 41,
       "y": 38,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "ninja",
       "x": 66,
       "y": 44,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "ninja",
       "x": 66,
       "y": 47,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "ninja",
       "x": 67,
       "y": 45,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "ninja",
       "x": 69,
       "y": 55,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 67,
       "y": 62,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 64,
       "y": 64,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 70,
       "y": 61,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 70,
       "y": 64,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 64,
       "y": 60,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 49,
       "y": 66,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 49,
       "y": 61,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 52,
       "y": 64,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 55,
       "y": 61,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "dragon",
       "x": 55,
       "y": 66,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "ninja",
       "x": 55,
       "y": 44,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 42,
       "y": 50,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 41,
       "y": 53,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 45,
       "y": 50,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
       "kind": "club_goblin",
       "x": 44,
       "y": 53,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     },
     {
-      "kind": "ninja",
-      "x": 70,
-      "y": 9,
-      "hp": 42,
-      "attack": 16,
-      "strength": 17,
-      "defence": 14
+      "kind": "goblin",
+      "x": 69,
+      "y": 20,
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
+    },
+    {
+      "kind": "goblin",
+      "x": 73,
+      "y": 26,
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
+    },
+    {
+      "kind": "goblin",
+      "x": 71,
+      "y": 32,
+      "hp": 7,
+      "attack": 2,
+      "strength": 2,
+      "defence": 1
     }
   ]
 }
