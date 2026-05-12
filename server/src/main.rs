@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -90,6 +90,8 @@ enum Obj {
     Angel,
     #[allow(dead_code)] // constructed by build.rs once a blacksmith is placed in map.json
     Blacksmith,
+    #[allow(dead_code)] // constructed by build.rs once an angler is placed in map.json
+    Angler,
 }
 
 #[derive(Clone, Copy, Serialize, PartialEq)]
@@ -190,12 +192,16 @@ fn item_equip_slot(item: &str) -> Option<&'static str> {
     if item.ends_with("_axe")
         || item.ends_with("_pickaxe")
         || item.ends_with("_sword")
-        || item == "fishing_rod"
+        || is_rod_item(item)
     {
         Some("right_hand")
     } else {
         None
     }
+}
+
+fn is_rod_item(item: &str) -> bool {
+    FISH_DEFS.iter().any(|f| f.rod == item)
 }
 
 #[derive(Clone, Serialize)]
@@ -237,6 +243,7 @@ struct Player {
     intent: Intent,
     trade_open: bool,
     forge_open: bool,
+    angler_open: bool,
     trade_request_from: Option<Pid>,
     trade_partner: Option<Pid>,
     trade_stage: TradeStage,
@@ -273,6 +280,7 @@ impl Player {
             intent: Intent::None,
             trade_open: false,
             forge_open: false,
+            angler_open: false,
             trade_request_from: None,
             trade_partner: None,
             trade_stage: TradeStage::Offer,
@@ -371,6 +379,10 @@ struct Game {
     events: Vec<Value>,
     ground: Vec<GroundItem>,
     next_gid: u64,
+    /// Calendar day (local) for which `daily_visitors` counts unique UUIDs.
+    daily_visitors_day: chrono::NaiveDate,
+    /// Distinct player UUIDs that have connected since midnight local time (resets when the day changes).
+    daily_visitors: HashSet<String>,
 }
 
 impl Game {
@@ -384,6 +396,7 @@ impl Game {
             player_spawn,
         } = build_map();
         let db = open_db();
+        let today = chrono::Local::now().date_naive();
         let mut g = Self {
             w,
             h,
@@ -400,6 +413,8 @@ impl Game {
             events: Vec::new(),
             ground: Vec::new(),
             next_gid: 1,
+            daily_visitors_day: today,
+            daily_visitors: HashSet::new(),
         };
         for mob in mobs {
             g.spawn_mob(mob.kind, mob.x, mob.y);
@@ -885,7 +900,7 @@ const ROCK_DEFS: [ResourceDef; 4] = [
     },
 ];
 
-const TOOL_DEFS: [ToolDef; 9] = [
+const TOOL_DEFS: [ToolDef; 8] = [
     ToolDef {
         item: "bronze_axe",
         name: "Bronze Axe",
@@ -950,15 +965,54 @@ const TOOL_DEFS: [ToolDef; 9] = [
         buy: 30000,
         power: 8,
     },
-    ToolDef {
-        item: "fishing_rod",
-        name: "Fishing Rod",
-        kind: "rod",
-        tier: 2,
-        buy: 200,
-        power: 0,
-    },
 ];
+
+/// Fishing tier ladder. `tier` is internal (0-3); display name uses tier+1.
+/// Catch chance per attempt = max(0, fishing_lvl - 10*tier) / 2^tier / 100.
+/// The angler trades each rod for 10 of the associated wood resource.
+#[derive(Clone, Copy)]
+struct FishDef {
+    tier: i32,
+    fish: &'static str,
+    fish_name: &'static str,
+    rod: &'static str,
+    rod_name: &'static str,
+    /// Resource the angler asks for (10x) in exchange for the rod.
+    resource: &'static str,
+    /// HP healed when eaten — `4 * 2^tier`.
+    heal: i32,
+    /// Coins paid by trader on sale — `4 * 4^tier`.
+    sell: i32,
+    /// Fishing XP per catch — `8 * 4^tier`.
+    xp: i32,
+}
+
+const FISH_DEFS: [FishDef; 4] = [
+    FishDef { tier: 0, fish: "yabby",      fish_name: "Yabby",      rod: "yabbypot", rod_name: "Yabby Pot",  resource: "pine_logs",  heal: 4,  sell: 4,   xp: 8   },
+    FishDef { tier: 1, fish: "trout",      fish_name: "Trout",      rod: "oakrod",   rod_name: "Oak Rod",    resource: "oak_logs",   heal: 8,  sell: 16,  xp: 32  },
+    FishDef { tier: 2, fish: "salmon",     fish_name: "Salmon",     rod: "yewrod",   rod_name: "Yew Rod",    resource: "yew_logs",   heal: 16, sell: 64,  xp: 128 },
+    FishDef { tier: 3, fish: "anglerfish", fish_name: "Anglerfish", rod: "magicrod", rod_name: "Magic Rod",  resource: "magic_logs", heal: 32, sell: 256, xp: 512 },
+];
+
+fn fish_def_by_rod(rod: &str) -> Option<FishDef> {
+    FISH_DEFS.iter().find(|f| f.rod == rod).copied()
+}
+
+fn fish_def_by_fish(fish: &str) -> Option<FishDef> {
+    FISH_DEFS.iter().find(|f| f.fish == fish).copied()
+}
+
+/// Min fishing level required to ever catch a tier-`tier` fish.
+fn fish_min_level(tier: i32) -> i32 {
+    10 * tier + 1
+}
+
+/// Catch chance (probability in [0,1]) — see `FishDef`.
+fn fish_catch_chance(level: i32, tier: i32) -> f32 {
+    let net = (level - 10 * tier).max(0) as f32;
+    let denom = (1u32 << (tier as u32)) as f32;
+    (net / denom / 100.0).min(1.0)
+}
 
 #[derive(Clone, Copy)]
 struct ArmorDef {
@@ -1068,7 +1122,14 @@ fn item_name(item: &str) -> &'static str {
         "gold_ore" => return "Gold ore",
         "cobalt_ore" => return "Cobalt ore",
         "salmon" => return "Salmon",
+        "yabby" => return "Yabby",
+        "trout" => return "Trout",
+        "anglerfish" => return "Anglerfish",
+        "fishing_rod" => return "Fishing rod",
         _ => {}
+    }
+    if let Some(f) = FISH_DEFS.iter().find(|f| f.rod == item) {
+        return f.rod_name;
     }
     if let Some(t) = TOOL_DEFS.iter().find(|t| t.item == item) {
         return t.name;
@@ -1098,8 +1159,8 @@ fn sell_value(item: &str) -> Option<i32> {
     if item == "berries" {
         return Some(1);
     }
-    if item == "salmon" {
-        return Some(35);
+    if let Some(f) = fish_def_by_fish(item) {
+        return Some(f.sell);
     }
     TREE_DEFS
         .iter()
@@ -1162,10 +1223,49 @@ fn gather_success(skill: i32, resource_tier: i32) -> bool {
     rand_f() < chance
 }
 
-/// Per-tick chance to catch: **1% × Fishing level** (level 1 ⇒ 1%, level 40 ⇒ 40%).
-fn fish_bite_chance(fishing_level: i32) -> f32 {
-    let lvl = fishing_level.max(1).min(99);
-    lvl as f32 * 0.01
+fn equipped_rod_def(p: &Player) -> Option<FishDef> {
+    fish_def_by_rod(&p.equipment.right_hand)
+}
+
+/// Highest-tier rod the player owns (in inv or equipped) that they could ever catch with.
+fn best_usable_rod(p: &Player) -> Option<FishDef> {
+    FISH_DEFS
+        .iter()
+        .copied()
+        .filter(|f| p.skills.fishing >= fish_min_level(f.tier))
+        .filter(|f| has_item(p, f.rod) || p.equipment.right_hand == f.rod)
+        .max_by_key(|f| f.tier)
+}
+
+fn highest_owned_rod(p: &Player) -> Option<FishDef> {
+    FISH_DEFS
+        .iter()
+        .copied()
+        .filter(|f| has_item(p, f.rod) || p.equipment.right_hand == f.rod)
+        .max_by_key(|f| f.tier)
+}
+
+fn player_any_rod_available(p: &Player) -> bool {
+    highest_owned_rod(p).is_some()
+}
+
+/// Choose which rod to use this attempt: equipped rod overrides; else highest usable.
+/// Returns Err with a message if the player has rods but can't catch with any of them yet.
+fn choose_active_rod(p: &Player) -> Result<FishDef, String> {
+    if let Some(eq) = equipped_rod_def(p) {
+        return Ok(eq);
+    }
+    if let Some(rod) = best_usable_rod(p) {
+        return Ok(rod);
+    }
+    if let Some(owned) = highest_owned_rod(p) {
+        return Err(format!(
+            "Your fishing level is too low for the {} (need {}).",
+            owned.rod_name,
+            fish_min_level(owned.tier),
+        ));
+    }
+    Err("You need a fishing rod.".to_string())
 }
 
 fn add_inv(p: &mut Player, item: &str, qty: i32) -> bool {
@@ -1234,15 +1334,16 @@ fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
         Obj::Trader => Intent::Talk,
         Obj::Angel => Intent::Talk,
         Obj::Blacksmith => Intent::Talk,
+        Obj::Angler => Intent::Talk,
         _ => Intent::None,
     };
     if matches!(intent, Intent::None) && matches!(g.tile(x, y), Tile::Water) {
-        let rod_ok = g
+        let has_any_rod = g
             .players
             .get(&pid)
-            .map(|p| has_item(p, "fishing_rod"))
+            .map(player_any_rod_available)
             .unwrap_or(false);
-        if rod_ok {
+        if has_any_rod {
             intent = Intent::Fish;
         }
     }
@@ -1256,20 +1357,29 @@ fn click(g: &mut Game, pid: Pid, x: i32, y: i32) {
         p.trade_open = false;
         p.angel_modal_open = false;
         p.forge_open = false;
+        p.angler_open = false;
     } else {
         let p = g.players.get_mut(&pid).unwrap();
         match clicked_obj {
             Obj::Trader => {
                 p.angel_modal_open = false;
                 p.forge_open = false;
+                p.angler_open = false;
             }
             Obj::Angel => {
                 p.trade_open = false;
                 p.forge_open = false;
+                p.angler_open = false;
             }
             Obj::Blacksmith => {
                 p.trade_open = false;
                 p.angel_modal_open = false;
+                p.angler_open = false;
+            }
+            Obj::Angler => {
+                p.trade_open = false;
+                p.angel_modal_open = false;
+                p.forge_open = false;
             }
             _ => {}
         }
@@ -1342,6 +1452,20 @@ fn near_blacksmith(g: &Game, pid: Pid) -> bool {
             let nx = p.x + dx;
             let ny = p.y + dy;
             if g.in_b(nx, ny) && matches!(g.obj(nx, ny), Obj::Blacksmith) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn near_angler(g: &Game, pid: Pid) -> bool {
+    let p = &g.players[&pid];
+    for dy in -1..=1i32 {
+        for dx in -1..=1i32 {
+            let nx = p.x + dx;
+            let ny = p.y + dy;
+            if g.in_b(nx, ny) && matches!(g.obj(nx, ny), Obj::Angler) {
                 return true;
             }
         }
@@ -1774,6 +1898,68 @@ fn forge(g: &mut Game, pid: Pid, item: &str) {
     ));
 }
 
+/// Angler trades 10 wood for the matching rod.
+const ANGLER_RESOURCE_QTY: i32 = 10;
+
+fn angler_buy(g: &mut Game, pid: Pid, rod: &str) {
+    if !near_angler(g, pid) {
+        if let Some(p) = g.players.get_mut(&pid) {
+            p.log.push("Stand next to the angler.".into());
+        }
+        return;
+    }
+    let Some(def) = fish_def_by_rod(rod) else { return };
+    let p = g.players.get_mut(&pid).unwrap();
+    if has_item(p, def.rod) || p.equipment.right_hand == def.rod {
+        p.log.push(format!("You already have a {}.", def.rod_name));
+        return;
+    }
+    if count_item(p, def.resource) < ANGLER_RESOURCE_QTY {
+        p.log.push(format!(
+            "The angler wants {} {} for the {}.",
+            ANGLER_RESOURCE_QTY,
+            item_name(def.resource),
+            def.rod_name,
+        ));
+        return;
+    }
+    let _ = deduct_item(p, def.resource, ANGLER_RESOURCE_QTY);
+    if !add_inv(p, def.rod, 1) {
+        for _ in 0..ANGLER_RESOURCE_QTY {
+            add_inv(p, def.resource, 1);
+        }
+        p.log.push("Inventory full!".into());
+        return;
+    }
+    p.log.push(format!(
+        "The angler hands you a {} for {} {}.",
+        def.rod_name,
+        ANGLER_RESOURCE_QTY,
+        item_name(def.resource),
+    ));
+}
+
+fn angler_catalog() -> Vec<Value> {
+    FISH_DEFS
+        .iter()
+        .map(|f| {
+            json!({
+                "rod": f.rod,
+                "rod_name": f.rod_name,
+                "fish": f.fish,
+                "fish_name": f.fish_name,
+                "resource": f.resource,
+                "resource_qty": ANGLER_RESOURCE_QTY,
+                "tier": f.tier + 1,
+                "min_level": fish_min_level(f.tier),
+                "heal": f.heal,
+                "sell": f.sell,
+                "xp": f.xp,
+            })
+        })
+        .collect()
+}
+
 fn push_private_chat(g: &mut Game, pid: Pid, text: impl Into<String>) {
     g.chat_seq += 1;
     let msg = ChatMsg {
@@ -1788,6 +1974,19 @@ fn push_private_chat(g: &mut Game, pid: Pid, text: impl Into<String>) {
     }
 }
 
+fn sync_daily_visitors_day(g: &mut Game) {
+    let today = chrono::Local::now().date_naive();
+    if g.daily_visitors_day != today {
+        g.daily_visitors_day = today;
+        g.daily_visitors.clear();
+    }
+}
+
+fn note_player_visit_today(g: &mut Game, uuid: &str) {
+    sync_daily_visitors_day(g);
+    g.daily_visitors.insert(uuid.to_string());
+}
+
 fn add_chat(g: &mut Game, pid: Pid, text: &str) -> bool {
     let text = text.trim();
     if text.is_empty() {
@@ -1799,8 +1998,27 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) -> bool {
     }
 
     if clean == "/help" {
-        push_private_chat(g, pid, "Commands: /help, /nick name, /die");
+        push_private_chat(g, pid, "Commands: /help, /online, /nick name, /die");
         push_private_chat(g, pid, "Controls: left click to walk, chop, mine, fish (rod + water), attack, trade. Right click to stop.");
+        return false;
+    }
+    if clean == "/online" {
+        sync_daily_visitors_day(g);
+        let n_online = g.players.len();
+        let n_unique_today = g.daily_visitors.len();
+        let mut names: Vec<String> = g.players.values().map(|p| p.name.clone()).collect();
+        names.sort();
+        let list = if names.is_empty() {
+            "(none)".into()
+        } else {
+            names.join(", ")
+        };
+        push_private_chat(
+            g,
+            pid,
+            format!("Online now: {n_online} | Unique players today: {n_unique_today}"),
+        );
+        push_private_chat(g, pid, format!("Players: {list}"));
         return false;
     }
     if clean == "/die" {
@@ -1815,6 +2033,7 @@ fn add_chat(g: &mut Game, pid: Pid, text: &str) -> bool {
             p.trade_open = false;
             p.angel_modal_open = false;
             p.forge_open = false;
+            p.angler_open = false;
             p.log.push("You die! Respawning...".into());
             return true;
         }
@@ -1875,17 +2094,23 @@ fn eat(g: &mut Game, pid: Pid, slot: usize) {
         p.log.push("You're already at full health.".into());
         return;
     }
-    let (amt, msg) = match p.inv[slot].item.as_str() {
-        "berries" => (3, "You eat the berries. (+3 HP)"),
-        "salmon" => (30, "You eat the salmon. (+30 HP)"),
-        _ => return,
+    let item = p.inv[slot].item.clone();
+    let (amt, msg) = if item == "berries" {
+        (3, "You eat the berries. (+3 HP)".to_string())
+    } else if let Some(f) = fish_def_by_fish(&item) {
+        (
+            f.heal,
+            format!("You eat the {}. (+{} HP)", f.fish_name.to_lowercase(), f.heal),
+        )
+    } else {
+        return;
     };
     p.inv[slot].qty -= 1;
     if p.inv[slot].qty == 0 {
         p.inv[slot] = InvSlot::default();
     }
     p.hp_cur = (p.hp_cur + amt).min(p.skills.hp);
-    p.log.push(msg.into());
+    p.log.push(msg);
 }
 
 fn roll_hit(atk: i32, def: i32, str_: i32) -> i32 {
@@ -1968,16 +2193,25 @@ fn process_player(g: &mut Game, pid: Pid) {
                         p.trade_open = true;
                         p.angel_modal_open = false;
                         p.forge_open = false;
+                        p.angler_open = false;
                     }
                     Obj::Angel => {
                         p.angel_modal_open = true;
                         p.trade_open = false;
                         p.forge_open = false;
+                        p.angler_open = false;
                     }
                     Obj::Blacksmith => {
                         p.forge_open = true;
                         p.trade_open = false;
                         p.angel_modal_open = false;
+                        p.angler_open = false;
+                    }
+                    Obj::Angler => {
+                        p.angler_open = true;
+                        p.trade_open = false;
+                        p.angel_modal_open = false;
+                        p.forge_open = false;
                     }
                     _ => {}
                 }
@@ -2136,40 +2370,54 @@ fn do_mine(g: &mut Game, pid: Pid, t: (i32, i32)) {
     }
 }
 fn do_fish(g: &mut Game, pid: Pid, t: (i32, i32)) {
-    let (has_rod, level) = {
+    let (rod_choice, level) = {
         let p = g.players.get(&pid).unwrap();
-        (has_item(p, "fishing_rod"), p.skills.fishing)
+        (choose_active_rod(p), p.skills.fishing)
     };
-    if !has_rod {
-        let p = g.players.get_mut(&pid).unwrap();
-        p.log.push("You need a fishing rod.".into());
-        p.intent = Intent::None;
-        p.target = None;
-        return;
-    }
+    let rod = match rod_choice {
+        Ok(r) => r,
+        Err(msg) => {
+            let p = g.players.get_mut(&pid).unwrap();
+            p.log.push(msg);
+            p.intent = Intent::None;
+            p.target = None;
+            return;
+        }
+    };
     if !matches!(g.tile(t.0, t.1), Tile::Water) {
         let p = g.players.get_mut(&pid).unwrap();
         p.intent = Intent::None;
         p.target = None;
         return;
     }
-    g.events.push(json!({"k":"fish","x":t.0,"y":t.1}));
-    let bite = fish_bite_chance(level);
-    if rand_f() >= bite {
+    if level < fish_min_level(rod.tier) {
         let p = g.players.get_mut(&pid).unwrap();
-        p.log.push("The fish slips away.".into());
+        p.log.push(format!(
+            "Your fishing level is too low for the {} (need {}).",
+            rod.rod_name,
+            fish_min_level(rod.tier),
+        ));
+        p.intent = Intent::None;
+        p.target = None;
+        return;
+    }
+    g.events.push(json!({"k":"fish","x":t.0,"y":t.1}));
+    let chance = fish_catch_chance(level, rod.tier);
+    if rand_f() >= chance {
+        let p = g.players.get_mut(&pid).unwrap();
+        p.log.push(format!("The {} slips away.", rod.fish_name.to_lowercase()));
         return;
     }
     let p = g.players.get_mut(&pid).unwrap();
-    if !add_inv(p, "salmon", 1) {
+    if !add_inv(p, rod.fish, 1) {
         p.log.push("Inventory full!".into());
         p.intent = Intent::None;
         p.target = None;
         return;
     }
-    p.log.push("You catch a salmon.".into());
+    p.log.push(format!("You catch a {}.", rod.fish_name.to_lowercase()));
     let ap = p.skills.angel_points;
-    p.skills.fishing_xp += xp_with_bonus(42, ap);
+    p.skills.fishing_xp += xp_with_bonus(rod.xp, ap);
     let old_fishing = p.skills.fishing;
     p.skills.fishing = level_from_xp(p.skills.fishing_xp);
     log_level_up(&mut p.log, "Fishing", old_fishing, p.skills.fishing);
@@ -2461,6 +2709,7 @@ fn process_mob(g: &mut Game, mid: Mid) {
             p.trade_open = false;
             p.angel_modal_open = false;
             p.forge_open = false;
+            p.angler_open = false;
         }
     } else if let Some(mut path) = bfs(g, pos, GoalKind::Adjacent((tx, ty)), 0) {
         if let Some(step) = path.pop_front() {
@@ -2594,7 +2843,15 @@ fn sell_catalog() -> Vec<Value> {
         })
     }));
     out.push(json!({ "item": "berries", "name": "Berries", "tier": 1, "sell": 1, "xp": 0 }));
-    out.push(json!({ "item": "salmon", "name": "Salmon", "tier": 2, "sell": 35, "xp": 42 }));
+    out.extend(FISH_DEFS.iter().map(|f| {
+        json!({
+            "item": f.fish,
+            "name": f.fish_name,
+            "tier": f.tier + 1,
+            "sell": f.sell,
+            "xp": f.xp,
+        })
+    }));
     out.extend(ARMOR_DEFS.iter().map(|a| {
         json!({
             "item": a.item,
@@ -2626,7 +2883,8 @@ fn build_state_msg(g: &Game, pid: Pid) -> String {
     let p = &g.players[&pid];
     let axe_tier = best_tool(p, "axe").map(|t| t.tier).unwrap_or(0);
     let pickaxe_tier = best_tool(p, "pickaxe").map(|t| t.tier).unwrap_or(0);
-    let rod_tier = best_tool(p, "rod").map(|t| t.tier).unwrap_or(0);
+    // Display rod tier as 1-based (matches axe/pickaxe convention).
+    let rod_tier = highest_owned_rod(p).map(|f| f.tier + 1).unwrap_or(0);
     let players: Vec<Value> = g.players.values().map(|q| json!({
         "id": q.id, "x": q.x, "y": q.y, "name": q.name, "hp": q.hp_cur, "hp_max": q.skills.hp
     })).collect();
@@ -2669,9 +2927,12 @@ fn build_state_msg(g: &Game, pid: Pid) -> String {
                  "intent": p.intent, "target": p.target, "trade_open": p.trade_open && near_trader(g, pid),
                  "angel_modal_open": p.angel_modal_open && near_angel(g, pid),
                  "forge_open": p.forge_open && near_blacksmith(g, pid),
-                 "armor_defence": armor_defence_bonus(p) },
+                 "angler_open": p.angler_open && near_angler(g, pid),
+                 "armor_defence": armor_defence_bonus(p),
+                 "weapon_damage": weapon_damage_bonus(p) },
         "players": players, "mobs": mobs, "objects": g.objects, "ground": g.ground, "log": p.log,
         "shop": shop_catalog(), "sells": sell_catalog(), "forge": forge_catalog(),
+        "angler": angler_catalog(),
         "player_trade": player_trade,
         "chat": chat,
         "events": g.events,
@@ -2741,6 +3002,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
         let _ = tx.send(init);
         let name = p.name.clone();
         g.players.insert(pid, p);
+        note_player_visit_today(&mut g, &uuid);
         println!("Player {} ({}) joined", pid, name);
     }
     let send_task = tokio::spawn(async move {
@@ -2780,6 +3042,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                             p.target = None;
                             p.trade_open = false;
                             p.angel_modal_open = false;
+                            p.angler_open = false;
                         }
                     }
                     "eat" => {
@@ -2825,6 +3088,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<Mutex<Game>>) {
                         if let Some(p) = g.players.get_mut(&pid) {
                             p.forge_open = false;
                         }
+                    }
+                    "close_angler" => {
+                        if let Some(p) = g.players.get_mut(&pid) {
+                            p.angler_open = false;
+                        }
+                    }
+                    "angler_buy" => {
+                        let item = v
+                            .get("item")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        angler_buy(&mut g, pid, &item);
+                        push_state = true;
                     }
                     "forge" => {
                         let item = v

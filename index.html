@@ -35,6 +35,7 @@
     </div>
     <div id="tab-equip" class="tab-content hidden">
       <div id="equip-grid"></div>
+      <div id="equip-stats" class="equip-stats" aria-live="polite"></div>
       <div class="hint">Click an equipped slot to unequip. Click an inventory item to equip it.</div>
     </div>
     <div id="tab-skills" class="tab-content hidden">
@@ -69,6 +70,16 @@
     </div>
     <div id="forge-list"></div>
     <div class="hint">Click a piece to forge it. Cost shown is ore from your inventory. Defence bonus applies while equipped.</div>
+  </div>
+</div>
+<div id="angler-window" class="window hidden">
+  <div class="window-card">
+    <div class="window-title">
+      <span>Angler</span>
+      <button id="angler-close" type="button">X</button>
+    </div>
+    <div id="angler-list"></div>
+    <div class="hint">Trade wood for a rod. Equip a rod to use it; otherwise the highest tier you can catch with is auto-selected.</div>
   </div>
 </div>
 <div id="player-trade-window" class="window hidden">
@@ -122,6 +133,7 @@
   </form>
 </div>
 <div id="item-tooltip" class="hidden"></div>
+<script src="https://cdn.jsdelivr.net/npm/@floating-ui/core@1.6.8/dist/floating-ui.core.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@floating-ui/dom@1.6.12/dist/floating-ui.dom.umd.min.js"></script>
 <script type="module" src="main.js"></script>
 </body>

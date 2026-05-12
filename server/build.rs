@@ -199,6 +199,7 @@ fn object_expr(object: &MapObject) -> Option<String> {
         "trader" => "Obj::Trader".into(),
         "angel" => "Obj::Angel".into(),
         "blacksmith" => "Obj::Blacksmith".into(),
+        "angler" => "Obj::Angler".into(),
         _ => return None,
     })
 }

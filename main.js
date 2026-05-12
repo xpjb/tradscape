@@ -29,7 +29,7 @@ const OBJ_IMG = {
   depleted_rock: 'entities/rock_depleted.png',
   bush: 'entities/berry_bush.png', bush_empty: 'entities/berry_bush_empty.png',
   boulder: 'entities/boulder.png', trader: 'entities/trader.png', angel: 'entities/angel.png',
-  blacksmith: 'entities/blacksmith.png',
+  blacksmith: 'entities/blacksmith.png', angler: 'entities/angler.png',
 };
 const MOB_IMG = {
   goblin: 'entities/goblin.png',
@@ -41,8 +41,10 @@ const ITEM_IMG = {
   pine_logs: 'items/pine_logs.png', oak_logs: 'items/oak_logs.png', yew_logs: 'items/yew_logs.png', magic_logs: 'items/magic_logs.png',
   copper_ore: 'items/copper_ore.png', iron_ore: 'items/iron_ore.png', gold_ore: 'items/gold_ore.png', cobalt_ore: 'items/cobalt_ore.png',
   berries: 'items/berries.png', salmon: 'items/salmon.png', coins: 'items/coins.png',
+  yabby: 'items/yabby.png', trout: 'items/trout.png', anglerfish: 'items/anglerfish.png',
   bronze_axe: 'items/bronze_axe.png', iron_axe: 'items/iron_axe.png', steel_axe: 'items/steel_axe.png', cobalt_axe: 'items/cobalt_axe.png',
   bronze_pickaxe: 'items/bronze_pickaxe.png', iron_pickaxe: 'items/iron_pickaxe.png', steel_pickaxe: 'items/steel_pickaxe.png', cobalt_pickaxe: 'items/cobalt_pickaxe.png',
+  yabbypot: 'items/yabbypot.png', oakrod: 'items/oakrod.png', yewrod: 'items/yewrod.png', magicrod: 'items/magicrod.png',
   fishing_rod: 'items/fishing_rod.png',
   copper_helm: 'items/copper_helm.png', copper_plate: 'items/copper_plate.png', copper_greaves: 'items/copper_greaves.png', copper_shield: 'items/copper_shield.png',
   iron_helm: 'items/iron_helm.png', iron_plate: 'items/iron_plate.png', iron_greaves: 'items/iron_greaves.png', iron_shield: 'items/iron_shield.png',
@@ -51,7 +53,7 @@ const ITEM_IMG = {
   copper_sword: 'items/copper_sword.png', iron_sword: 'items/iron_sword.png', gold_sword: 'items/gold_sword.png', cobalt_sword: 'items/cobalt_sword.png',
 };
 const TILE_COLOR = { grass: '#3a7d2c', dirt: '#7a5a3b', sand: '#d9c787', water: '#2a5fb0', stone: '#888', path: '#a99a82' };
-const OBJ_COLOR  = { tree: '#1f5417', stump: '#5a3a1f', rock: '#666', depleted_rock: '#aaa', bush: '#7a3', boulder: '#777', trader: '#c0a060', angel: '#e8e8ff', blacksmith: '#9a7a55' };
+const OBJ_COLOR  = { tree: '#1f5417', stump: '#5a3a1f', rock: '#666', depleted_rock: '#aaa', bush: '#7a3', boulder: '#777', trader: '#c0a060', angel: '#e8e8ff', blacksmith: '#9a7a55', angler: '#3aa0c8' };
 const MOB_COLOR  = { goblin: '#7caa3c', club_goblin: '#6b8f2a', ninja: '#2b2b35', dragon: '#8b2222' };
 const MOB_LABEL = { goblin: 'G', club_goblin: 'C', ninja: 'N', dragon: 'D' };
 const WALKABLE_OBJ = new Set(['none']);
@@ -59,8 +61,10 @@ const ITEM_NAME = {
   pine_logs: 'Pine logs', oak_logs: 'Oak logs', yew_logs: 'Yew logs', magic_logs: 'Magic logs',
   copper_ore: 'Copper ore', iron_ore: 'Iron ore', gold_ore: 'Gold ore', cobalt_ore: 'Cobalt ore',
   berries: 'Berries', salmon: 'Salmon', coins: 'Coins',
+  yabby: 'Yabby', trout: 'Trout', anglerfish: 'Anglerfish',
   bronze_axe: 'Bronze axe', iron_axe: 'Iron axe', steel_axe: 'Steel axe', cobalt_axe: 'Cobalt axe',
   bronze_pickaxe: 'Bronze pickaxe', iron_pickaxe: 'Iron pickaxe', steel_pickaxe: 'Steel pickaxe', cobalt_pickaxe: 'Cobalt pickaxe',
+  yabbypot: 'Yabby pot', oakrod: 'Oak rod', yewrod: 'Yew rod', magicrod: 'Magic rod',
   fishing_rod: 'Fishing rod',
   copper_helm: 'Copper helm', copper_plate: 'Copper plate', copper_greaves: 'Copper greaves', copper_shield: 'Copper shield',
   iron_helm: 'Iron helm', iron_plate: 'Iron plate', iron_greaves: 'Iron greaves', iron_shield: 'Iron shield',
@@ -71,6 +75,23 @@ const ITEM_NAME = {
 
 function itemName(item) {
   return ITEM_NAME[item] || item.replaceAll('_', ' ');
+}
+
+/** Eat-to-heal amounts — keep in sync with `eat` in server/src/main.rs */
+const FOOD_HEAL = { berries: 3, yabby: 4, trout: 8, salmon: 16, anglerfish: 32 };
+
+function tooltipItemValueGp(itemKey) {
+  if (itemKey === 'coins') return 1;
+  const shop = state && state.shop;
+  const forge = state && state.forge;
+  const sells = state && state.sells;
+  const fromShop = shop && shop.find(r => r.item === itemKey);
+  if (fromShop && fromShop.buy != null) return fromShop.buy;
+  const fromForge = forge && forge.find(r => r.item === itemKey);
+  if (fromForge && fromForge.value != null) return fromForge.value;
+  const fromSell = sells && sells.find(r => r.item === itemKey);
+  if (fromSell && fromSell.sell != null) return fromSell.sell;
+  return null;
 }
 
 /** Matches server `XP_CURVE_*` / `xp_threshold_for_level` / `level_from_xp` in main.rs. */
@@ -154,11 +175,25 @@ function itemTooltipContent(itemKey, qty) {
   const forgeData = state && state.forge;
   const def = forgeData && forgeData.find(r => r.item === itemKey);
   let html = `<span class="tt-name">${itemName(itemKey)}</span>`;
-  if (qty != null && qty > 1) html += `<span class="tt-cost">Qty: ${qty}</span>`;
+  if (qty != null && qty > 1) {
+    html += `<span class="tt-line tt-meta">Quantity ${qty}</span>`;
+  }
+  const heal = FOOD_HEAL[itemKey];
+  if (heal != null) {
+    html += `<span class="tt-line tt-stat">Restores ${heal} HP</span>`;
+    html += '<span class="tt-line tt-desc">Food — eat from inventory (Inv tab) when hurt.</span>';
+  }
   if (def) {
-    if (def.damage) html += `<span class="tt-stat">+${def.damage} atk/str</span>`;
-    if (def.defence) html += `<span class="tt-stat">+${def.defence} def</span>`;
-    html += `<span class="tt-cost">Forged from ${def.ore_qty} ${itemName(def.ore)}</span>`;
+    if (def.damage > 0) {
+      html += `<span class="tt-line tt-stat">+${def.damage} attack</span>`;
+      html += `<span class="tt-line tt-stat">+${def.damage} strength</span>`;
+    }
+    if (def.defence) html += `<span class="tt-line tt-stat">+${def.defence} defence</span>`;
+  }
+  const gp = tooltipItemValueGp(itemKey);
+  if (gp != null) {
+    const label = itemKey === 'coins' ? 'Value' : 'Trade value';
+    html += `<span class="tt-line tt-value"><span class="tt-value-label">${label}</span> ${gp.toLocaleString()} gp</span>`;
   }
   return html;
 }
@@ -173,13 +208,13 @@ function showTooltip(anchor, html) {
     computePosition(anchor, _tooltip, {
       placement: 'top',
       strategy: 'fixed',
-      middleware: [offset(6), flip(), shift({ padding: 4 })],
+      middleware: [offset(8), flip(), shift({ padding: 8 })],
     }).then(({ x, y }) => {
       _tooltip.style.left = `${x}px`;
       _tooltip.style.top = `${y}px`;
     });
   }
-  update();
+  requestAnimationFrame(() => requestAnimationFrame(update));
 }
 
 function hideTooltip() {
@@ -765,6 +800,11 @@ document.getElementById('forge-close').onclick = () => {
   ws.send(JSON.stringify({ t: 'close_forge' }));
 };
 
+document.getElementById('angler-close').onclick = () => {
+  document.getElementById('angler-window').classList.add('hidden');
+  ws.send(JSON.stringify({ t: 'close_angler' }));
+};
+
 document.getElementById('player-trade-close').onclick = () => {
   document.getElementById('player-trade-window').classList.add('hidden');
   ws.send(JSON.stringify({ t: 'close_player_trade' }));
@@ -813,8 +853,10 @@ function updatePanel(s) {
   );
   document.getElementById('eq-list').textContent = `axe T${s.you.axe_tier || 0}, pickaxe T${s.you.pickaxe_tier || 0}, rod T${s.you.rod_tier || 0}`;
   renderEquipment(s.you.equipment || {});
+  renderEquipCombatStats(s);
   renderTrade(s);
   renderForge(s);
+  renderAngler(s);
   renderPlayerTrade(s);
   renderAngelModal(s);
   renderChat(s.chat || []);
@@ -889,7 +931,7 @@ function updateInvSlot(slot, row) {
       ws.send(JSON.stringify({ t: 'trade_offer_slot', slot: row.slot }));
       return;
     }
-    if (it.item === 'berries' || it.item === 'salmon') {
+    if (FOOD_HEAL[it.item] != null) {
       if (row.hpCur >= row.hpMax) return;
       ws.send(JSON.stringify({ t: 'eat', slot: row.slot }));
       return;
@@ -913,6 +955,50 @@ const EQUIP_SLOTS = [
   { key: 'left_hand',  label: 'Left hand' },
   { key: 'right_hand', label: 'Right hand' },
 ];
+
+function renderEquipCombatStats(s) {
+  const el = document.getElementById('equip-stats');
+  if (!el) return;
+  const sk = s.you && s.you.skills;
+  el.replaceChildren();
+  if (!sk) return;
+  const w = Number(s.you.weapon_damage) || 0;
+  const ad = Number(s.you.armor_defence) || 0;
+  const atkBase = sk.attack ?? 1;
+  const strBase = sk.strength ?? 1;
+  const defBase = sk.defence ?? 1;
+
+  const title = document.createElement('div');
+  title.className = 'equip-stats-title';
+  title.textContent = 'Your combat stats';
+  el.appendChild(title);
+
+  const note = document.createElement('div');
+  note.className = 'equip-stats-note';
+  note.textContent = 'Totals used when you attack monsters or they attack you (same as the server).';
+  el.appendChild(note);
+
+  function addRow(label, total, bracketText) {
+    const row = document.createElement('div');
+    row.className = 'equip-stats-row';
+    const k = document.createElement('span');
+    k.className = 'equip-stats-k';
+    k.textContent = label;
+    const v = document.createElement('span');
+    v.className = 'equip-stats-v';
+    v.append(`${total} `);
+    const br = document.createElement('span');
+    br.className = 'equip-stats-br';
+    br.textContent = bracketText;
+    v.appendChild(br);
+    row.append(k, v);
+    el.appendChild(row);
+  }
+
+  addRow('Attack', atkBase + w, `(${atkBase} + ${w} weapon)`);
+  addRow('Strength', strBase + w, `(${strBase} + ${w} weapon)`);
+  addRow('Defence', defBase + ad, `(${defBase} + ${ad} armour)`);
+}
 
 function renderEquipment(eq) {
   const grid = document.getElementById('equip-grid');
@@ -1048,6 +1134,43 @@ function renderForge(s) {
         detail: `${row.ore_qty} ${itemName(row.ore)} (${have}/${row.ore_qty})`,
         onClick: () => ws.send(JSON.stringify({ t: 'forge', item: row.item })),
         disabled: !enough,
+      });
+    },
+  );
+}
+
+function renderAngler(s) {
+  const win = document.getElementById('angler-window');
+  const list = document.getElementById('angler-list');
+  if (!win || !list) return;
+  const open = !!s.you.angler_open;
+  win.classList.toggle('hidden', !open);
+  if (!open) return;
+
+  const inv = s.you.inv || [];
+  const has = (item) => inv.some(it => it && it.item === item);
+  const count = (item) => inv.reduce((acc, it) => acc + (it && it.item === item ? it.qty : 0), 0);
+  const fishingLvl = (s.you.skills && s.you.skills.fishing) || 1;
+  const items = s.angler || [];
+  syncChildren(
+    list,
+    items,
+    row => row.rod,
+    () => createTradeButton(),
+    (el, row) => {
+      const haveRod = has(row.rod) || (s.you.equipment && s.you.equipment.right_hand === row.rod);
+      const haveQty = count(row.resource);
+      const enough = haveQty >= row.resource_qty;
+      const detail = haveRod
+        ? 'owned'
+        : `${row.resource_qty} ${itemName(row.resource)} (${haveQty}/${row.resource_qty})`;
+      const lvlNote = fishingLvl < row.min_level ? ` — needs Fishing ${row.min_level}` : '';
+      updateTradeButton(el, {
+        item: row.rod,
+        name: `${row.rod_name} → ${row.fish_name} (T${row.tier})${lvlNote}`,
+        detail,
+        onClick: () => ws.send(JSON.stringify({ t: 'angler_buy', item: row.rod })),
+        disabled: haveRod || !enough,
       });
     },
   );
