@@ -1,3 +1,5 @@
+import { connectNet, fetchCertHash, buildWtUrl } from './net.js';
+
 const TILE = 48;
 const VIEW_W = 15, VIEW_H = 15;
 
@@ -303,31 +305,12 @@ function drawCell(im, fallback, label, px, py) {
   }
 }
 
-/** Directory URL for app root (fixes /tradscape vs /tradscape/ vs …/index.html). */
-function tradscapeBaseHref() {
-  const p = window.location.pathname;
-  if (p.endsWith('/')) return window.location.origin + p;
-  const leaf = (p.split('/').pop()) || '';
-  if (/\.[a-z0-9]+$/i.test(leaf)) {
-    const d = p.slice(0, p.lastIndexOf('/') + 1);
-    return window.location.origin + d;
-  }
-  return window.location.origin + p + '/';
-}
+const uuid = localStorage.getItem('tradscape_uuid') || '';
+const name = (localStorage.getItem('tradscape_name')) || prompt('Character name?', 'Adventurer') || 'Adventurer';
+localStorage.setItem('tradscape_name', name);
 
-/** WebSocket at same path tier as the app (e.g. …/tradscape/ws behind a subpath proxy). */
-function tradscapeWsUrl() {
-  const u = new URL('./ws', tradscapeBaseHref());
-  u.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return u.href;
-}
-const ws = new WebSocket(tradscapeWsUrl());
-ws.onopen = () => {
-  const uuid = localStorage.getItem('tradscape_uuid') || '';
-  const name = (localStorage.getItem('tradscape_name')) || prompt('Character name?', 'Adventurer') || 'Adventurer';
-  localStorage.setItem('tradscape_name', name);
-  ws.send(JSON.stringify({ t: 'join', uuid, name }));
-};
+const certHash = await fetchCertHash();
+const ws = await connectNet({ url: buildWtUrl(), certHash, uuid, name });
 ws.onmessage = (ev) => {
   const m = JSON.parse(ev.data);
   if (m.t === 'init') {

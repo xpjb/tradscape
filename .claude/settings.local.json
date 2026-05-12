@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(node -e \"import\\('pngjs'\\).then\\(\\({PNG}\\)=>{const fs=require\\('fs'\\);const p=PNG.sync.read\\(fs.readFileSync\\('assets/source_sheet.png'\\)\\);console.log\\(p.width,p.height\\);}\\)\")",
-      "Bash(node slice.mjs)"
+      "Bash(node slice.mjs)",
+      "Bash(timeout 10 cargo run)",
+      "Bash(chmod +x /c/Users/pat/Desktop/repo/tradscape/server/tradscape_logs.sh)"
     ]
   }
 }

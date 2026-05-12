@@ -27,6 +27,7 @@ rclone copyto \
 
 rclone copyto "$ROOT/index.html" "${RCLONE_DEST}/index.html"
 rclone copyto "$ROOT/main.js" "${RCLONE_DEST}/main.js"
+rclone copyto "$ROOT/net.js" "${RCLONE_DEST}/net.js"
 rclone copyto "$ROOT/style.css" "${RCLONE_DEST}/style.css"
 
 if [[ -d "$ROOT/assets" ]]; then
