@@ -514,6 +514,19 @@ struct SavedPlayer {
     equipment: Equipment,
 }
 
+/// One-time conversion of pre-update `fishing_rod` items into the equivalent `oakrod`.
+/// The legacy rod was T2 / 200 gp at the trader, which matches the new oak rod's value.
+fn migrate_legacy_fishing_rod(inv: &mut [InvSlot], equipment: &mut Equipment) {
+    for s in inv.iter_mut() {
+        if s.item == "fishing_rod" && s.qty > 0 {
+            s.item = "oakrod".into();
+        }
+    }
+    if equipment.right_hand == "fishing_rod" {
+        equipment.right_hand = "oakrod".into();
+    }
+}
+
 fn open_db() -> Connection {
     let db = Connection::open(DB_PATH).expect("open sqlite database");
     db.execute_batch(
@@ -579,7 +592,7 @@ fn load_player(db: &Connection, uuid: &str) -> Option<SavedPlayer> {
             let skills_json: String = row.get(4)?;
             let inv_json: String = row.get(5)?;
             let equipment_json: String = row.get(6)?;
-            let equipment: Equipment = serde_json::from_str(&equipment_json).unwrap_or_default();
+            let mut equipment: Equipment = serde_json::from_str(&equipment_json).unwrap_or_default();
             let mut skills =
                 serde_json::from_str(&skills_json).unwrap_or_else(|_| Skills::starter());
             skills.woodcutting = level_from_xp(skills.woodcutting_xp);
@@ -592,6 +605,7 @@ fn load_player(db: &Connection, uuid: &str) -> Option<SavedPlayer> {
             let mut inv: Vec<InvSlot> = serde_json::from_str(&inv_json)
                 .unwrap_or_else(|_| vec![InvSlot::default(); INV_SIZE]);
             inv.resize(INV_SIZE, InvSlot::default());
+            migrate_legacy_fishing_rod(&mut inv, &mut equipment);
             Ok(SavedPlayer {
                 name: row.get(0)?,
                 x: row.get(1)?,
@@ -1162,11 +1176,21 @@ fn sell_value(item: &str) -> Option<i32> {
     if let Some(f) = fish_def_by_fish(item) {
         return Some(f.sell);
     }
+    if let Some(v) = rod_value(item) {
+        return Some(v);
+    }
     TREE_DEFS
         .iter()
         .chain(ROCK_DEFS.iter())
         .find(|r| r.item == item)
         .map(|r| r.sell)
+}
+
+/// Rod resale value = the materials the angler asked for at trader sell prices.
+fn rod_value(item: &str) -> Option<i32> {
+    let f = fish_def_by_rod(item)?;
+    let unit = sell_value(f.resource)?;
+    Some(unit * ANGLER_RESOURCE_QTY)
 }
 
 fn buy_price(item: &str) -> Option<i32> {
@@ -2850,6 +2874,14 @@ fn sell_catalog() -> Vec<Value> {
             "tier": f.tier + 1,
             "sell": f.sell,
             "xp": f.xp,
+        })
+    }));
+    out.extend(FISH_DEFS.iter().map(|f| {
+        json!({
+            "item": f.rod,
+            "name": f.rod_name,
+            "tier": f.tier + 1,
+            "sell": rod_value(f.rod).unwrap_or(0),
         })
     }));
     out.extend(ARMOR_DEFS.iter().map(|a| {
